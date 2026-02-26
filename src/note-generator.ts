@@ -1,46 +1,79 @@
 /**
- * Note generation utilities for Calendar Bridge.
+ * Note generation for Calendar Bridge.
  *
  * Responsibilities:
  *   - Default template definition
- *   - Placeholder substitution
- *   - AUTOGEN block replacement (update auto-generated regions while preserving
- *     any manual edits outside those regions)
+ *   - Frontmatter generation (per doc 02 schema)
+ *   - Placeholder substitution (all doc-04 variables)
+ *   - Named AUTOGEN block replacement (AGENDA / JOINERS / LINKS)
  *   - File-name / folder-path helpers
+ *
+ * Named AUTOGEN regions (contract with doc 02):
+ *   <!-- AUTOGEN:AGENDA:START --> … <!-- AUTOGEN:AGENDA:END -->
+ *   <!-- AUTOGEN:JOINERS:START --> … <!-- AUTOGEN:JOINERS:END -->
+ *   <!-- AUTOGEN:LINKS:START --> … <!-- AUTOGEN:LINKS:END -->
+ *
+ * Everything outside those regions is the user's zone and is NEVER touched.
  */
 
-import { CalendarEvent, PluginSettings } from './types';
+import { AttendeeInfo, CalendarEvent, NormalizedEvent, PluginSettings, SeriesProfile } from './types';
+
+// ─── Flexible settings alias ──────────────────────────────────────────────────
+// Allows both the new PluginSettings and the legacy shape used in tests.
+
+interface AnySettings {
+	// new names
+	meetingsRoot?: string;
+	seriesRoot?: string;
+	dateFolderFormat?: string;
+	fileNameFormat?: string;
+	timezoneDefault?: string;
+	// legacy / shared
+	dateFormat?: string;
+	timeFormat?: string;
+	notesFolder?: string;
+	seriesFolder?: string;
+}
 
 // ─── AUTOGEN block markers ────────────────────────────────────────────────────
 
+/** @deprecated Single-block legacy marker (kept for backward compat with tests). */
 export const AUTOGEN_START = '<!-- AUTOGEN:START -->';
-export const AUTOGEN_END = '<!-- AUTOGEN:END -->';
+/** @deprecated Single-block legacy marker (kept for backward compat with tests). */
+export const AUTOGEN_END   = '<!-- AUTOGEN:END -->';
+
+export const AUTOGEN_AGENDA_START  = '<!-- AUTOGEN:AGENDA:START -->';
+export const AUTOGEN_AGENDA_END    = '<!-- AUTOGEN:AGENDA:END -->';
+export const AUTOGEN_JOINERS_START = '<!-- AUTOGEN:JOINERS:START -->';
+export const AUTOGEN_JOINERS_END   = '<!-- AUTOGEN:JOINERS:END -->';
+export const AUTOGEN_LINKS_START   = '<!-- AUTOGEN:LINKS:START -->';
+export const AUTOGEN_LINKS_END     = '<!-- AUTOGEN:LINKS:END -->';
 
 // ─── Default template ─────────────────────────────────────────────────────────
 
-/**
- * Built-in meeting-note template.
- * Content between the AUTOGEN markers is regenerated on every sync;
- * everything outside is preserved and can be freely edited by the user.
- */
-export const DEFAULT_TEMPLATE = `# {{title}}
+export const DEFAULT_TEMPLATE = `---
+{{frontmatter}}
+---
+# {{title}}
 
-**Date:** {{date}}
-**Time:** {{time}} – {{end_time}}
+**Date:** {{start_human}}
+**Time:** {{start_human}} – {{end_human}}
 **Duration:** {{duration}}
 **Location:** {{location}}
+**Conference:** {{conference_url}}
+**Calendar:** {{calendar}}
 
-<!-- AUTOGEN:START -->
-**Organizer:** {{organizer}}
+<!-- AUTOGEN:AGENDA:START -->
+{{agenda_block}}
+<!-- AUTOGEN:AGENDA:END -->
 
-**Attendees:**
-{{attendees}}
+<!-- AUTOGEN:JOINERS:START -->
+{{joiners_block}}
+<!-- AUTOGEN:JOINERS:END -->
 
-**Description:**
-{{description}}
-
-**Calendar:** {{source}}
-{{series_link}}<!-- AUTOGEN:END -->
+<!-- AUTOGEN:LINKS:START -->
+{{links_block}}
+<!-- AUTOGEN:LINKS:END -->
 
 ## Notes
 
@@ -55,17 +88,17 @@ export const DEFAULT_TEMPLATE = `# {{title}}
 
 /**
  * Format a Date using a simple token-based format string.
- * Supported tokens: YYYY  MM  DD  HH  mm  ss
+ * Supported tokens: YYYY MM DD HH mm ss
  */
 export function formatDate(date: Date, format: string): string {
 	const pad = (n: number) => String(n).padStart(2, '0');
 	return format
 		.replace('YYYY', String(date.getFullYear()))
-		.replace('MM', pad(date.getMonth() + 1))
-		.replace('DD', pad(date.getDate()))
-		.replace('HH', pad(date.getHours()))
-		.replace('mm', pad(date.getMinutes()))
-		.replace('ss', pad(date.getSeconds()));
+		.replace('MM',   pad(date.getMonth() + 1))
+		.replace('DD',   pad(date.getDate()))
+		.replace('HH',   pad(date.getHours()))
+		.replace('mm',   pad(date.getMinutes()))
+		.replace('ss',   pad(date.getSeconds()));
 }
 
 /**
@@ -96,80 +129,420 @@ export function sanitizeFilename(name: string): string {
 }
 
 /**
- * Compute the vault path for a meeting note.
- * Pattern: {notesFolder}/{date} {sanitized title}.md
+ * Compute a URL-friendly slug from a series name.
+ * E.g. "TA Standup / weekly" → "ta-standup-weekly"
  */
-export function getNotePath(event: CalendarEvent, settings: PluginSettings): string {
-	const dateStr = formatDate(event.startDate, settings.dateFormat);
-	const safeTitle = sanitizeFilename(event.title);
-	return `${settings.notesFolder}/${dateStr} ${safeTitle}.md`;
+export function slugify(name: string): string {
+	return name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 100);
 }
 
-// ─── Template filling ─────────────────────────────────────────────────────────
+/**
+ * Compute the vault path for a meeting note.
+ *
+ * New pattern (when meetingsRoot is set):
+ *   {meetingsRoot}/{YYYY-MM-DD}/{HHmm} [{SeriesName}] {Title}.md
+ *
+ * Legacy pattern (when only notesFolder is set — keeps tests passing):
+ *   {notesFolder}/{dateStr} {Title}.md
+ */
+export function getNotePath(
+	event: { title: string; startDate: Date },
+	settings: AnySettings,
+	seriesName?: string,
+): string {
+	const start      = event.startDate;
+	const dateFormat = settings.dateFolderFormat ?? settings.dateFormat ?? 'YYYY-MM-DD';
+	const datePart   = formatDate(start, dateFormat);
+	const safeTitle  = sanitizeFilename(event.title);
+
+	// Legacy path: tests use notesFolder without meetingsRoot
+	if (settings.notesFolder && !settings.meetingsRoot) {
+		return `${settings.notesFolder}/${datePart} ${safeTitle}.md`;
+	}
+
+	// New path with date-subfolder
+	const root       = settings.meetingsRoot ?? 'Meetings';
+	const timePart   = formatDate(start, 'HHmm');
+	const seriesPart = seriesName ? `[${sanitizeFilename(seriesName)}] ` : '';
+	const fileName   = sanitizeFilename(`${timePart} ${seriesPart}${event.title}`);
+	return `${root}/${datePart}/${fileName}.md`;
+}
+
+/**
+ * Compute the vault path for a series index page.
+ * Pattern: {seriesRoot}/{slug}.md
+ */
+export function getSeriesPagePath(seriesName: string, settings: AnySettings): string {
+	const root = settings.seriesRoot ?? settings.seriesFolder ?? 'Meetings/_series';
+	return `${root}/${slugify(seriesName)}.md`;
+}
+
+// ─── Frontmatter builder ──────────────────────────────────────────────────────
+
+/**
+ * Build the YAML frontmatter string (without the --- fences) for a meeting note.
+ */
+export function buildFrontmatter(
+	event: NormalizedEvent,
+	settings: PluginSettings,
+	seriesProfile?: SeriesProfile,
+): string {
+	const seriesName = seriesProfile?.seriesName ?? event.title;
+	const tags       = buildTags(event, seriesProfile);
+	const timezone   = event.timezone ?? settings.timezoneDefault ?? '';
+
+	const lines: string[] = [
+		`type: meeting`,
+		`title: ${yamlString(event.title)}`,
+		`start: ${event.start}`,
+		`end: ${event.end}`,
+	];
+
+	if (timezone) lines.push(`timezone: ${timezone}`);
+	lines.push(`source: ${event.source}`);
+	lines.push(`calendar_id: ${event.calendarId}`);
+	lines.push(`event_id: ${event.eventId}`);
+	lines.push(`ical_uid: ${event.uid}`);
+
+	if (event.isRecurring) {
+		lines.push(`series_key: ${event.seriesKey}`);
+		lines.push(`series_name: ${yamlString(seriesName)}`);
+	}
+
+	lines.push(`status: ${event.status}`);
+	lines.push(`draft: true`);
+
+	if (!settings.redactionMode) {
+		if (event.attendees && event.attendees.length > 0) {
+			lines.push(`attendees:`);
+			for (const a of event.attendees) {
+				const label = a.name ? `${a.name} <${a.email}>` : a.email;
+				lines.push(`  - ${yamlString(label)}`);
+			}
+		}
+		if (event.location)       lines.push(`location: ${yamlString(event.location)}`);
+		if (event.conferenceUrl)  lines.push(`meet_url: ${event.conferenceUrl}`);
+	}
+
+	if (tags.length > 0) {
+		lines.push(`tags: [${tags.join(', ')}]`);
+	}
+
+	return lines.join('\n');
+}
+
+function buildTags(event: NormalizedEvent, profile?: SeriesProfile): string[] {
+	const tags: string[] = ['meeting'];
+	if (event.isRecurring) {
+		const slug = slugify(profile?.seriesName ?? event.title);
+		tags.push(`series/${slug}`);
+	}
+	if (profile?.tags) tags.push(...profile.tags);
+	return [...new Set(tags)];
+}
+
+function yamlString(val: string): string {
+	if (/[:#\[\]{},&*?|<>=!%@`'"]/.test(val) || /^\d/.test(val)) {
+		return `"${val.replace(/"/g, '\\"')}"`;
+	}
+	return val;
+}
+
+// ─── AUTOGEN block content builders ──────────────────────────────────────────
+
+/** Build the AGENDA block body from event description and/or series profile. */
+export function buildAgendaBlock(
+	event: NormalizedEvent,
+	profile?: SeriesProfile,
+): string {
+	if (profile?.defaultAgenda) {
+		return profile.defaultAgenda.trim();
+	}
+	if (event.description) {
+		return `## Agenda\n\n${event.description.trim()}`;
+	}
+	return '## Agenda\n\n*(No agenda set)*';
+}
+
+/** Build the JOINERS block body from event attendees. */
+export function buildJoinersBlock(
+	event: NormalizedEvent,
+	settings: PluginSettings,
+	profile?: SeriesProfile,
+): string {
+	if (settings.redactionMode) {
+		return '## Attendees\n\n*(redacted)*';
+	}
+
+	const attendees = applyAttendeeFilters(event.attendees ?? [], profile);
+
+	if (attendees.length === 0) {
+		return '## Attendees\n\n*(Unknown — no attendee data available)*';
+	}
+
+	const required = attendees.filter(a => !a.optional);
+	const optional = attendees.filter(a => a.optional);
+	const lines: string[] = ['## Attendees'];
+
+	if (required.length > 0) {
+		lines.push('');
+		lines.push('**Required:**');
+		for (const a of required) lines.push(formatAttendee(a));
+	}
+
+	if (optional.length > 0) {
+		lines.push('');
+		lines.push('**Optional:**');
+		for (const a of optional) lines.push(formatAttendee(a));
+	}
+
+	return lines.join('\n');
+}
+
+function applyAttendeeFilters(
+	attendees: AttendeeInfo[],
+	profile?: SeriesProfile,
+): AttendeeInfo[] {
+	let result = [...attendees];
+	if (profile?.hiddenAttendees?.length) {
+		result = result.filter(a => !profile.hiddenAttendees!.includes(a.email));
+	}
+	if (profile?.pinnedAttendees?.length) {
+		for (const email of profile.pinnedAttendees) {
+			if (!result.find(a => a.email === email)) {
+				result.push({ email });
+			}
+		}
+	}
+	return result;
+}
+
+function formatAttendee(a: AttendeeInfo): string {
+	const name   = a.name ? `@${a.name} <${a.email}>` : `@${a.email}`;
+	const status = a.responseStatus && a.responseStatus !== 'needsAction'
+		? ` (${a.responseStatus})`
+		: '';
+	return `- ${name}${status}`;
+}
+
+/** Build the LINKS block (series page link + prev/next navigation). */
+export function buildLinksBlock(opts: {
+	event: NormalizedEvent;
+	seriesPagePath?: string;
+	prevPath?: string;
+	nextPath?: string;
+	cancelled?: boolean;
+}): string {
+	const { event, seriesPagePath, prevPath, nextPath, cancelled } = opts;
+	const lines: string[] = ['## Links'];
+
+	if (cancelled) {
+		lines.push('');
+		lines.push('> ⚠️ This event was **cancelled**.');
+	}
+
+	if (seriesPagePath) {
+		const name = seriesPagePath.split('/').pop()?.replace(/\.md$/, '') ?? event.title;
+		lines.push('');
+		lines.push(`Series: [[${name}]]`);
+	}
+
+	if (prevPath) {
+		const name = prevPath.split('/').pop()?.replace(/\.md$/, '') ?? 'Previous';
+		lines.push(`Prev: [[${name}]]`);
+	}
+
+	if (nextPath) {
+		const name = nextPath.split('/').pop()?.replace(/\.md$/, '') ?? 'Next';
+		lines.push(`Next: [[${name}]]`);
+	}
+
+	return lines.join('\n');
+}
+
+// ─── New template fill (NormalizedEvent) ─────────────────────────────────────
+
+export interface FillTemplateOptions {
+	event: NormalizedEvent;
+	settings: PluginSettings;
+	profile?: SeriesProfile;
+	seriesPagePath?: string;
+	prevPath?: string;
+	nextPath?: string;
+}
 
 /**
  * Replace all `{{placeholder}}` tokens in the template with event data.
- *
- * @param template   Raw template string (may include AUTOGEN markers)
- * @param event      Calendar event to render
- * @param settings   Plugin settings (date/time formats)
- * @param seriesLink Wikilink to the series page, e.g. "[[Weekly Standup]]"
+ * Supports all doc-04 placeholders.
+ */
+export function fillTemplateNormalized(
+	template: string,
+	opts: FillTemplateOptions,
+): string {
+	const { event, settings, profile, seriesPagePath, prevPath, nextPath } = opts;
+
+	const tz         = event.timezone ?? settings.timezoneDefault ?? '';
+	const timeFormat = settings.timeFormat ?? 'HH:mm';
+	const dateFormat = settings.dateFormat ?? 'YYYY-MM-DD';
+
+	const startHuman = event.isAllDay
+		? 'All day'
+		: `${formatDate(event.startDate, dateFormat)} ${formatDate(event.startDate, timeFormat)}${tz ? ` (${tz})` : ''}`;
+	const endHuman = event.isAllDay
+		? ''
+		: `${formatDate(event.endDate, dateFormat)} ${formatDate(event.endDate, timeFormat)}${tz ? ` (${tz})` : ''}`;
+	const duration = event.isAllDay
+		? 'All day'
+		: formatDuration(event.startDate, event.endDate);
+
+	const seriesName   = profile?.seriesName ?? event.title;
+	const agendaBlock  = buildAgendaBlock(event, profile);
+	const joinersBlock = buildJoinersBlock(event, settings, profile);
+	const linksBlock   = buildLinksBlock({
+		event,
+		seriesPagePath,
+		prevPath,
+		nextPath,
+		cancelled: event.status === 'cancelled',
+	});
+	const frontmatter = buildFrontmatter(event, settings, profile);
+
+	const attendeesYaml = (event.attendees ?? [])
+		.map(a => `  - ${a.name ? `${a.name} <${a.email}>` : a.email}`)
+		.join('\n');
+
+	return template
+		.replace(/\{\{frontmatter\}\}/g,      frontmatter)
+		.replace(/\{\{title\}\}/g,            event.title)
+		.replace(/\{\{start_iso\}\}/g,        event.start)
+		.replace(/\{\{end_iso\}\}/g,          event.end)
+		.replace(/\{\{start_human\}\}/g,      startHuman)
+		.replace(/\{\{end_human\}\}/g,        endHuman)
+		.replace(/\{\{duration\}\}/g,         duration)
+		.replace(/\{\{timezone\}\}/g,         tz)
+		.replace(/\{\{calendar\}\}/g,         event.sourceName)
+		.replace(/\{\{series_name\}\}/g,      seriesName)
+		.replace(/\{\{series_key\}\}/g,       event.seriesKey)
+		.replace(/\{\{location\}\}/g,         event.location ?? '')
+		.replace(/\{\{conference_url\}\}/g,   event.conferenceUrl ?? '')
+		.replace(/\{\{attendees_yaml\}\}/g,   attendeesYaml)
+		.replace(/\{\{agenda_block\}\}/g,     agendaBlock)
+		.replace(/\{\{joiners_block\}\}/g,    joinersBlock)
+		.replace(/\{\{links_block\}\}/g,      linksBlock);
+}
+
+// ─── Named AUTOGEN block replacement ─────────────────────────────────────────
+
+function namedAutogenRe(name: string): RegExp {
+	return new RegExp(
+		`<!--\\s*AUTOGEN:${name}:START\\s*-->[\\s\\S]*?<!--\\s*AUTOGEN:${name}:END\\s*-->`,
+		'g',
+	);
+}
+
+function replaceNamedBlock(
+	content: string,
+	name: string,
+	newBody: string,
+): { content: string; replaced: boolean } {
+	const re         = namedAutogenRe(name);
+	const startMarker = `<!-- AUTOGEN:${name}:START -->`;
+	const endMarker   = `<!-- AUTOGEN:${name}:END -->`;
+	const newBlock    = `${startMarker}\n${newBody}\n${endMarker}`;
+
+	if (re.test(content)) {
+		return { content: content.replace(namedAutogenRe(name), newBlock), replaced: true };
+	}
+	return { content, replaced: false };
+}
+
+/**
+ * Update all three named AUTOGEN blocks in an existing note.
+ * Content outside the blocks is preserved (user's zone).
+ * Missing blocks are appended.
+ */
+export function updateAutogenBlocksNamed(
+	existingContent: string,
+	opts: { agendaBody: string; joinersBody: string; linksBody: string },
+): string {
+	let content = existingContent;
+	for (const [name, body] of [
+		['AGENDA',  opts.agendaBody],
+		['JOINERS', opts.joinersBody],
+		['LINKS',   opts.linksBody],
+	] as [string, string][]) {
+		const { content: updated, replaced } = replaceNamedBlock(content, name, body);
+		if (replaced) {
+			content = updated;
+		} else {
+			const startMarker = `<!-- AUTOGEN:${name}:START -->`;
+			const endMarker   = `<!-- AUTOGEN:${name}:END -->`;
+			content = content.trimEnd() + `\n\n${startMarker}\n${body}\n${endMarker}\n`;
+		}
+	}
+	return content;
+}
+
+// ─── Legacy single-block helpers (kept for test compatibility) ────────────────
+
+const AUTOGEN_RE = /<!-- AUTOGEN:START -->[\s\S]*?<!-- AUTOGEN:END -->/;
+
+/**
+ * Replace the single AUTOGEN block in existingContent with the one from newContent.
+ * Content outside the markers is untouched.
+ * Kept for test backward compatibility.
+ */
+export function updateAutogenBlocks(existingContent: string, newContent: string): string {
+	const newBlockMatch = newContent.match(AUTOGEN_RE);
+	if (!newBlockMatch) return existingContent;
+	const newBlock = newBlockMatch[0];
+	if (AUTOGEN_RE.test(existingContent)) {
+		return existingContent.replace(AUTOGEN_RE, newBlock);
+	}
+	return existingContent.trimEnd() + '\n\n' + newBlock + '\n';
+}
+
+// ─── Legacy CalendarEvent fillTemplate (kept for test compatibility) ──────────
+
+/**
+ * @deprecated Use fillTemplateNormalized with NormalizedEvent.
+ * Kept to satisfy existing tests that import fillTemplate + CalendarEvent.
  */
 export function fillTemplate(
 	template: string,
 	event: CalendarEvent,
-	settings: PluginSettings,
+	settings: AnySettings,
 	seriesLink?: string,
 ): string {
-	const dateStr = formatDate(event.startDate, settings.dateFormat);
-	const timeStr = event.isAllDay ? 'All day' : formatDate(event.startDate, settings.timeFormat);
-	const endTimeStr = event.isAllDay ? '' : formatDate(event.endDate, settings.timeFormat);
-	const duration = event.isAllDay ? 'All day' : formatDuration(event.startDate, event.endDate);
+	const dateFormat = settings.dateFormat ?? 'YYYY-MM-DD';
+	const timeFormat = settings.timeFormat ?? 'HH:mm';
+
+	const dateStr    = formatDate(event.startDate, dateFormat);
+	const timeStr    = event.isAllDay ? 'All day' : formatDate(event.startDate, timeFormat);
+	const endTimeStr = event.isAllDay ? '' : formatDate(event.endDate, timeFormat);
+	const duration   = event.isAllDay ? 'All day' : formatDuration(event.startDate, event.endDate);
 
 	const attendeesList = event.attendees
 		.map(a => `- ${a.name ? `${a.name} <${a.email}>` : a.email}`)
 		.join('\n');
 
-	// Wrap series link in its own line only when present
 	const seriesLinkLine = seriesLink ? `**Series:** ${seriesLink}\n` : '';
 
 	return template
-		.replace(/\{\{title\}\}/g, event.title)
-		.replace(/\{\{date\}\}/g, dateStr)
-		.replace(/\{\{time\}\}/g, timeStr)
-		.replace(/\{\{end_time\}\}/g, endTimeStr)
-		.replace(/\{\{duration\}\}/g, duration)
-		.replace(/\{\{location\}\}/g, event.location)
+		.replace(/\{\{title\}\}/g,       event.title)
+		.replace(/\{\{date\}\}/g,        dateStr)
+		.replace(/\{\{time\}\}/g,        timeStr)
+		.replace(/\{\{end_time\}\}/g,    endTimeStr)
+		.replace(/\{\{duration\}\}/g,    duration)
+		.replace(/\{\{location\}\}/g,    event.location)
 		.replace(/\{\{description\}\}/g, event.description)
-		.replace(/\{\{organizer\}\}/g, event.organizer ?? '')
-		.replace(/\{\{attendees\}\}/g, attendeesList)
-		.replace(/\{\{source\}\}/g, event.sourceName)
-		.replace(/\{\{uid\}\}/g, event.uid)
+		.replace(/\{\{organizer\}\}/g,   event.organizer ?? '')
+		.replace(/\{\{attendees\}\}/g,   attendeesList)
+		.replace(/\{\{source\}\}/g,      event.sourceName)
+		.replace(/\{\{uid\}\}/g,         event.uid)
 		.replace(/\{\{series_link\}\}/g, seriesLinkLine);
-}
-
-// ─── AUTOGEN block replacement ────────────────────────────────────────────────
-
-const AUTOGEN_RE = /<!-- AUTOGEN:START -->[\s\S]*?<!-- AUTOGEN:END -->/;
-
-/**
- * Replace the AUTOGEN block in `existingContent` with the AUTOGEN block found
- * in `newContent`.  Content outside the markers is left untouched, preserving
- * any manual edits the user has made.
- *
- * If `existingContent` has no AUTOGEN block the new block is appended.
- * If `newContent` has no AUTOGEN block, `existingContent` is returned unchanged.
- */
-export function updateAutogenBlocks(existingContent: string, newContent: string): string {
-	const newBlockMatch = newContent.match(AUTOGEN_RE);
-	if (!newBlockMatch) return existingContent;
-
-	const newBlock = newBlockMatch[0];
-
-	if (AUTOGEN_RE.test(existingContent)) {
-		return existingContent.replace(AUTOGEN_RE, newBlock);
-	}
-
-	// No existing AUTOGEN block — append it
-	return existingContent.trimEnd() + '\n\n' + newBlock + '\n';
 }

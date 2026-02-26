@@ -1,27 +1,190 @@
-// ─── Calendar Source ──────────────────────────────────────────────────────────
+// ─── Source types ─────────────────────────────────────────────────────────────
 
-export interface CalendarSource {
-	/** Unique identifier for this source */
-	id: string;
-	/** Display name shown in settings and note metadata */
-	name: string;
-	/** Google Calendar ICS export URL or any .ics feed URL */
-	url: string;
-	/** Whether this source is included in syncs */
-	enabled: boolean;
-}
+export type SourceType = 'gcal_api' | 'ics_public' | 'ics_secret';
 
-// ─── Event data ───────────────────────────────────────────────────────────────
+export type EventStatus = 'confirmed' | 'cancelled' | 'tentative' | 'unknown';
+
+// ─── Attendee ─────────────────────────────────────────────────────────────────
 
 export interface AttendeeInfo {
 	email: string;
 	name?: string;
 	/** e.g. "REQ-PARTICIPANT", "OPT-PARTICIPANT", "CHAIR" */
 	role?: string;
+	optional?: boolean;
+	responseStatus?: 'accepted' | 'declined' | 'tentative' | 'needsAction';
 }
 
+// ─── Normalized event (internal canonical form) ───────────────────────────────
+
+/**
+ * All calendar sources normalize to this shape before reaching the sync engine.
+ * The note generator works exclusively with NormalizedEvent.
+ */
+export interface NormalizedEvent {
+	// Required
+	source: SourceType;
+	calendarId: string;
+	eventId: string;          // source-specific ID
+	uid: string;              // iCal UID (or derived)
+	title: string;
+	start: string;            // ISO 8601 with TZ offset
+	end: string;              // ISO 8601 with TZ offset
+	startDate: Date;          // parsed Date object (for sorting / range checks)
+	endDate: Date;            // parsed Date object
+	isAllDay: boolean;
+	status: EventStatus;
+	seriesKey: string;        // stable series identifier (see doc 02)
+	isRecurring: boolean;
+
+	// Optional
+	updatedAt?: string;
+	description?: string;
+	location?: string;
+	conferenceUrl?: string;
+	attendees?: AttendeeInfo[];
+	organizer?: string;       // "Name <email>" or just email
+	sourceName: string;       // display name of the calendar
+	recurringEventId?: string; // Google's recurringEventId (for seriesKey)
+	timezone?: string;        // TZID from VEVENT or event timezone
+}
+
+// ─── Series ───────────────────────────────────────────────────────────────────
+
+/**
+ * User-configurable profile for a meeting series.
+ * Stored in subscriptions.json alongside enabled/disabled state.
+ */
+export interface SeriesProfile {
+	seriesKey: string;
+	seriesName: string;
+	enabled: boolean;
+	noteFolderOverride?: string;
+	templateOverride?: string;
+	defaultAgenda?: string;   // markdown text
+	tags?: string[];
+	pinnedAttendees?: string[];  // emails always included
+	hiddenAttendees?: string[];  // emails never shown
+}
+
+// ─── Subscriptions state (persisted to subscriptions.json) ───────────────────
+
+export interface SubscriptionsState {
+	version: number;
+	profiles: Record<string, SeriesProfile>; // keyed by seriesKey
+}
+
+// ─── ICS cache entry (persisted to cache.json) ────────────────────────────────
+
+export interface IcsCacheEntry {
+	url: string;
+	etag?: string;
+	lastModified?: string;
+	lastFetched?: string;
+}
+
+export interface SyncCache {
+	version: number;
+	lastSyncAt?: string;
+	icsCache: Record<string, IcsCacheEntry>; // keyed by source id
+	/** eventId/uid → vault path mapping for conflict resolution */
+	eventToPath: Record<string, string>;
+}
+
+// ─── Settings (global) ────────────────────────────────────────────────────────
+
+export interface GoogleApiSettings {
+	clientId: string;
+	clientSecret: string;
+	/** Stored access token (encrypted where possible) */
+	accessToken?: string;
+	refreshToken?: string;
+	tokenExpiry?: number;
+	selectedCalendarIds: string[];
+	includeConferenceData: boolean;
+}
+
+export interface IcsSourceSettings {
+	/** Public or secret ICS URL */
+	url: string;
+	pollIntervalMinutes: number;
+}
+
+export interface CalendarSourceConfig {
+	id: string;
+	name: string;
+	sourceType: SourceType;
+	enabled: boolean;
+	google?: GoogleApiSettings;
+	ics?: IcsSourceSettings;
+}
+
+export interface PluginSettings {
+	// Source config
+	sources: CalendarSourceConfig[];
+
+	// Sync
+	horizonDays: number;
+	autoSyncIntervalMinutes: number;  // 0 = off
+	syncOnStartup: boolean;
+
+	// Paths
+	meetingsRoot: string;
+	seriesRoot: string;
+	templatePath: string;
+
+	// Features
+	enableSeriesPages: boolean;
+	enablePrevNextLinks: boolean;
+	writeStateInVault: boolean;
+
+	// Format
+	dateFolderFormat: string;
+	fileNameFormat: string;       // e.g. "{time} [{series}] {title}"
+	timezoneDefault: string;      // empty = use system
+	dateFormat: string;
+	timeFormat: string;
+
+	// Privacy
+	redactionMode: boolean;       // do not write attendees/links
+
+	// Internal
+	lastSyncTime?: string;
+	stateVersion: number;
+}
+
+export const DEFAULT_SETTINGS: PluginSettings = {
+	sources: [],
+	horizonDays: 3,
+	autoSyncIntervalMinutes: 60,
+	syncOnStartup: true,
+	meetingsRoot: 'Meetings',
+	seriesRoot: 'Meetings/_series',
+	templatePath: '',
+	enableSeriesPages: true,
+	enablePrevNextLinks: true,
+	writeStateInVault: false,
+	dateFolderFormat: 'YYYY-MM-DD',
+	fileNameFormat: '{time} [{series}] {title}',
+	timezoneDefault: '',
+	dateFormat: 'YYYY-MM-DD',
+	timeFormat: 'HH:mm',
+	redactionMode: false,
+	stateVersion: 1,
+};
+
+// ─── Legacy compat shim (kept so existing tests import still work) ────────────
+
+/** @deprecated Use CalendarSourceConfig instead */
+export interface CalendarSource {
+	id: string;
+	name: string;
+	url: string;
+	enabled: boolean;
+}
+
+/** @deprecated Use NormalizedEvent instead */
 export interface CalendarEvent {
-	/** RFC 5545 UID.  All instances of a recurring series share the same UID. */
 	uid: string;
 	title: string;
 	description: string;
@@ -29,46 +192,9 @@ export interface CalendarEvent {
 	startDate: Date;
 	endDate: Date;
 	isAllDay: boolean;
-	/** True when this event is an instance of a recurring series. */
 	isRecurring: boolean;
 	attendees: AttendeeInfo[];
-	/** Formatted organizer string, e.g. "Alice <alice@example.com>" */
 	organizer?: string;
-	/** ID of the CalendarSource this event came from */
 	sourceId: string;
-	/** Display name of the CalendarSource this event came from */
 	sourceName: string;
 }
-
-// ─── Settings ────────────────────────────────────────────────────────────────
-
-export interface PluginSettings {
-	calendarSources: CalendarSource[];
-	/** Vault path for individual meeting notes */
-	notesFolder: string;
-	/** Vault path for recurring-series index pages */
-	seriesFolder: string;
-	/** Vault path to a custom template note (empty → built-in template) */
-	templatePath: string;
-	/** How many calendar days ahead to sync */
-	syncHorizonDays: number;
-	/** Trigger a sync automatically when Obsidian starts */
-	syncOnStartup: boolean;
-	/** Date format tokens: YYYY MM DD */
-	dateFormat: string;
-	/** Time format tokens: HH mm */
-	timeFormat: string;
-	/** ISO timestamp of the last successful sync (informational) */
-	lastSyncTime?: string;
-}
-
-export const DEFAULT_SETTINGS: PluginSettings = {
-	calendarSources: [],
-	notesFolder: 'Meetings',
-	seriesFolder: 'Meetings/Series',
-	templatePath: '',
-	syncHorizonDays: 14,
-	syncOnStartup: true,
-	dateFormat: 'YYYY-MM-DD',
-	timeFormat: 'HH:mm',
-};

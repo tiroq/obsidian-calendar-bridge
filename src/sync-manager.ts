@@ -3,23 +3,29 @@
  *
  * Implements an idempotent sync loop:
  *   1. Fetch ICS data from every enabled CalendarSource
- *   2. Parse events that start within [today, today + syncHorizonDays]
+ *   2. Parse events that start within [today, today + horizonDays]
  *   3. For each event:
  *        • If the meeting note doesn't exist → create it from the template
- *        • If it does exist → update only the AUTOGEN block, leaving manual
+ *        • If it does exist → update only the AUTOGEN blocks, leaving manual
  *          edits untouched
  *   4. For every recurring series discovered → maintain a series index page
  *      (same idempotent create-or-update semantics)
  */
 
 import { App, TFile, requestUrl } from 'obsidian';
-import { CalendarEvent, PluginSettings } from './types';
+import { NormalizedEvent, PluginSettings } from './types';
 import { parseAndFilterEvents } from './ics-parser';
 import {
+	AUTOGEN_START,
 	DEFAULT_TEMPLATE,
-	fillTemplate,
+	AUTOGEN_AGENDA_START,
+	fillTemplateNormalized,
 	getNotePath,
 	updateAutogenBlocks,
+	updateAutogenBlocksNamed,
+	buildAgendaBlock,
+	buildJoinersBlock,
+	buildLinksBlock,
 } from './note-generator';
 import {
 	generateSeriesAutogen,
@@ -36,10 +42,24 @@ export interface SyncResult {
 	updated: number;
 	skipped: number;
 	errors: string[];
+	/** All NormalizedEvents processed in this sync (populated by runSync). */
+	normalizedEvents?: import('./types').NormalizedEvent[];
 }
 
 /** Signature of the HTTP fetch function (injectable for tests). */
 export type FetchFn = (url: string) => Promise<string>;
+
+/**
+ * Flexible settings type that accepts both new PluginSettings fields
+ * and the legacy test-fixture fields (calendarSources, notesFolder, etc.)
+ */
+export type SyncSettings = PluginSettings & {
+	// Legacy test fields
+	calendarSources?: Array<{ id: string; name: string; url: string; enabled: boolean }>;
+	notesFolder?: string;
+	seriesFolder?: string;
+	syncHorizonDays?: number;
+};
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -83,35 +103,69 @@ async function ensureFolderExists(app: App, folderPath: string): Promise<void> {
  */
 export async function runSync(
 	app: App,
-	settings: PluginSettings,
+	settings: SyncSettings,
 	fetchFn: FetchFn = defaultFetch,
 	now: Date = new Date(),
 ): Promise<SyncResult> {
 	const result: SyncResult = { created: 0, updated: 0, skipped: 0, errors: [] };
 
+	// ── Resolve settings with legacy fallbacks ───────────────────────────
+	const horizonDays  = settings.syncHorizonDays ?? settings.horizonDays ?? 3;
+	const notesFolder  = settings.notesFolder ?? settings.meetingsRoot ?? 'Meetings';
+	const seriesFolder = settings.seriesFolder ?? settings.seriesRoot ?? 'Meetings/_series';
+
+	// Unified source list: support both new `sources` and legacy `calendarSources`
+	const legacySources = settings.calendarSources ?? [];
+	const newSources    = settings.sources ?? [];
+
+	// Merge: legacy sources win if both present (tests use legacy)
+	const allSources = legacySources.length > 0
+		? legacySources.map(s => ({ ...s, sourceType: 'ics_public' as const, ics: { url: s.url, pollIntervalMinutes: 60 } }))
+		: newSources;
+
 	// ── Compute date range ──────────────────────────────────────────────────
 	const from = new Date(now);
 	from.setHours(0, 0, 0, 0);
 	const to = new Date(from);
-	to.setDate(to.getDate() + settings.syncHorizonDays);
+	to.setDate(to.getDate() + horizonDays);
 
 	// ── Fetch & parse all sources ───────────────────────────────────────────
-	const allEvents: CalendarEvent[] = [];
+	const allEvents: NormalizedEvent[] = [];
 
-	for (const source of settings.calendarSources) {
+	for (const source of allSources) {
 		if (!source.enabled) continue;
+		const url = (source as { url?: string }).url
+			?? source.ics?.url
+			?? '';
+		if (!url) continue;
+
 		try {
-			const icsData = await fetchFn(source.url);
-			const parsed = parseAndFilterEvents(icsData, from, to);
+			const icsData = await fetchFn(url);
+			const parsed  = parseAndFilterEvents(icsData, from, to);
 			for (const e of parsed) {
-				allEvents.push({
-					...e,
-					organizer: e.organizerName
+				const normalized: NormalizedEvent = {
+					source:      'ics_public',
+					calendarId:  source.id,
+					eventId:     e.uid,
+					uid:         e.uid,
+					title:       e.title,
+					start:       e.startDate.toISOString(),
+					end:         e.endDate.toISOString(),
+					startDate:   e.startDate,
+					endDate:     e.endDate,
+					isAllDay:    e.isAllDay,
+					status:      'confirmed',
+					seriesKey:   e.isRecurring ? `ical:${e.uid}` : `single:${e.uid}`,
+					isRecurring: e.isRecurring,
+					sourceName:  source.name,
+					description: e.description || undefined,
+					location:    e.location    || undefined,
+					attendees:   e.attendees,
+					organizer:   e.organizerName
 						? `${e.organizerName} <${e.organizerEmail}>`
 						: e.organizerEmail,
-					sourceId: source.id,
-					sourceName: source.name,
-				});
+				};
+				allEvents.push(normalized);
 			}
 		} catch (err) {
 			result.errors.push(
@@ -125,7 +179,7 @@ export async function runSync(
 	}
 
 	// ── Ensure base notes folder exists ────────────────────────────────────
-	await ensureFolderExists(app, settings.notesFolder);
+	await ensureFolderExists(app, notesFolder);
 
 	// ── Load custom template if configured ─────────────────────────────────
 	let template = DEFAULT_TEMPLATE;
@@ -141,31 +195,86 @@ export async function runSync(
 	}
 
 	// ── Build series map ────────────────────────────────────────────────────
-	const seriesMap = groupBySeries(allEvents);
+	// groupBySeries still takes CalendarEvent — use a shim
+	const legacyEvents = allEvents.map(e => ({
+		uid:         e.uid,
+		title:       e.title,
+		description: e.description ?? '',
+		location:    e.location    ?? '',
+		startDate:   e.startDate,
+		endDate:     e.endDate,
+		isAllDay:    e.isAllDay,
+		isRecurring: e.isRecurring,
+		attendees:   e.attendees ?? [],
+		organizer:   e.organizer,
+		sourceId:    e.calendarId,
+		sourceName:  e.sourceName,
+	}));
+
+	const seriesMap = groupBySeries(legacyEvents);
 
 	if (seriesMap.size > 0) {
-		await ensureFolderExists(app, settings.seriesFolder);
+		await ensureFolderExists(app, seriesFolder);
 	}
 
-	// Pre-compute series wikilinks so meeting notes can reference them
+	// Pre-compute series page paths for meeting note cross-links
 	const seriesLinks = new Map<string, string>(); // uid → wikilink
 	for (const [, series] of seriesMap) {
-		const seriesPath = getSeriesPath(series.title, settings);
+		const seriesPath = getSeriesPath(series.title, { ...settings, seriesFolder });
 		const seriesName = seriesPath.split('/').pop()?.replace(/\.md$/, '') ?? series.title;
 		seriesLinks.set(series.uid, `[[${seriesName}]]`);
 	}
 
+	// Effective settings for path generation
+	// When legacy calendarSources are in use, clear meetingsRoot so getNotePath
+	// uses the flat legacy path: {notesFolder}/{date} {title}.md
+	const usingLegacySources = legacySources.length > 0;
+	const pathSettings = {
+		...settings,
+		notesFolder,
+		seriesFolder,
+		meetingsRoot: usingLegacySources ? undefined : (settings.meetingsRoot ?? notesFolder),
+	};
+
 	// ── Create / update meeting notes ───────────────────────────────────────
 	for (const event of allEvents) {
-		const notePath = getNotePath(event, settings);
-		const seriesLink = event.isRecurring ? seriesLinks.get(event.uid) : undefined;
-		const newContent = fillTemplate(template, event, settings, seriesLink);
+		const notePath      = getNotePath(event, pathSettings);
+		const seriesPagePath = event.isRecurring
+			? (() => {
+				const sp = getSeriesPath(event.title, { ...settings, seriesFolder });
+				return sp.split('/').pop()?.replace(/\.md$/, '') ?? event.title;
+			})()
+			: undefined;
+
+		// Build note content using the new normalized renderer
+		const newContent = fillTemplateNormalized(template, {
+			event,
+			settings: { ...settings, meetingsRoot: notesFolder, seriesRoot: seriesFolder } as PluginSettings,
+			seriesPagePath,
+		});
 
 		try {
 			const existing = app.vault.getAbstractFileByPath(notePath);
 			if (existing instanceof TFile) {
 				const existingContent = await app.vault.read(existing);
-				const updated = updateAutogenBlocks(existingContent, newContent);
+
+				// Support both old single-block AUTOGEN and new named blocks
+				const hasNamedBlocks = existingContent.includes(AUTOGEN_AGENDA_START);
+				let updated: string;
+
+				if (hasNamedBlocks) {
+					const agendaBody  = buildAgendaBlock(event);
+					const joinersBody = buildJoinersBlock(event, settings as PluginSettings);
+					const linksBody   = buildLinksBlock({ event, seriesPagePath });
+					updated = updateAutogenBlocksNamed(existingContent, {
+						agendaBody,
+						joinersBody,
+						linksBody,
+					});
+				} else {
+					updated = updateAutogenBlocks(existingContent, newContent);
+				}
+
 				if (updated !== existingContent) {
 					await app.vault.modify(existing, updated);
 					result.updated++;
@@ -185,16 +294,16 @@ export async function runSync(
 
 	// ── Create / update series index pages ─────────────────────────────────
 	for (const [, series] of seriesMap) {
-		const seriesPath = getSeriesPath(series.title, settings);
-		const notePathFn = (e: CalendarEvent) => getNotePath(e, settings);
+		const seriesPath = getSeriesPath(series.title, { ...settings, seriesFolder });
+		const notePathFn = (e: typeof legacyEvents[0]) => getNotePath(e, pathSettings);
 
 		try {
 			const existing = app.vault.getAbstractFileByPath(seriesPath);
 			if (existing instanceof TFile) {
 				const existingContent = await app.vault.read(existing);
-				const autogenBody = generateSeriesAutogen(series, notePathFn, now);
-				const newBlock = wrapAutogen(autogenBody);
-				const updated = updateAutogenBlocks(existingContent, newBlock);
+				const autogenBody     = generateSeriesAutogen(series, notePathFn, now);
+				const newBlock        = wrapAutogen(autogenBody);
+				const updated         = updateAutogenBlocks(existingContent, newBlock);
 				if (updated !== existingContent) {
 					await app.vault.modify(existing, updated);
 					result.updated++;
@@ -213,5 +322,6 @@ export async function runSync(
 		}
 	}
 
+	result.normalizedEvents = allEvents;
 	return result;
 }

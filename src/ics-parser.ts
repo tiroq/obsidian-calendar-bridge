@@ -418,6 +418,25 @@ function propsToRawEvent(props: ParsedLine[]): RawVEvent | null {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
+ * For all-day events, compare by local calendar date components.
+ * For timed events, compare by timestamp.
+ * This avoids timezone-offset mismatches where local midnight < UTC midnight.
+ */
+function eventInRange(startDate: Date, isAllDay: boolean, from: Date, to: Date): boolean {
+	if (isAllDay) {
+		// Extract local date components for an offset-agnostic comparison
+		const sy = startDate.getFullYear(), sm = startDate.getMonth(), sd = startDate.getDate();
+		const fy = from.getFullYear(), fm = from.getMonth(), fd = from.getDate();
+		const ty = to.getFullYear(), tm = to.getMonth(), td = to.getDate();
+		const startNum = sy * 10000 + sm * 100 + sd;
+		const fromNum = fy * 10000 + fm * 100 + fd;
+		const toNum   = ty * 10000 + tm * 100 + td;
+		return startNum >= fromNum && startNum <= toNum;
+	}
+	return startDate >= from && startDate <= to;
+}
+
+/**
  * Parse raw ICS text and return all events (including recurring expansions)
  * whose start date falls within [from, to].
  */
@@ -438,7 +457,7 @@ export function parseAndFilterEvents(
 			const rrule = parseRRule(raw.rrule);
 			if (!rrule) {
 				// Unparseable RRULE — include only the base occurrence if in range
-				if (raw.startDate >= from && raw.startDate <= to) {
+					if (eventInRange(raw.startDate, raw.isAllDay, from, to)) {
 					result.push(rawToPublic(raw, raw.startDate, raw.endDate, true));
 				}
 				continue;
@@ -451,7 +470,7 @@ export function parseAndFilterEvents(
 				result.push(rawToPublic(raw, startDate, endDate, true));
 			}
 		} else {
-			if (raw.startDate >= from && raw.startDate <= to) {
+			if (eventInRange(raw.startDate, raw.isAllDay, from, to)) {
 				result.push(rawToPublic(raw, raw.startDate, raw.endDate, false));
 			}
 		}
