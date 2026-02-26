@@ -649,20 +649,29 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 		const g = source.google;
 
 		const port = randomPort();
+		console.log('[CalendarBridge] Starting OAuth flow on port', port);
 
 		const adapter = new GoogleCalendarAdapter({
 			id: source.id,
 			name: source.name,
 			settings: g,
 			onSettingsUpdate: async (updated) => {
+				console.log('[CalendarBridge] onSettingsUpdate called, accessToken present:', !!updated.accessToken);
 				Object.assign(g, updated);
+				// Also write back into the plugin settings array directly
+				const idx = this.plugin.settings.sources.findIndex(s => s.id === source.id);
+				if (idx !== -1) {
+					this.plugin.settings.sources[idx].google = { ...g };
+				}
 				await this.plugin.saveSettings();
+				console.log('[CalendarBridge] saveSettings() completed');
 			},
 		});
 
 		let authUrl: string;
 		try {
 			authUrl = await adapter.getAuthorizationUrlAsync(port);
+			console.log('[CalendarBridge] Auth URL built:', authUrl.slice(0, 80) + '…');
 		} catch (err) {
 			new Notice(`Calendar Bridge: Failed to build auth URL — ${(err as Error).message}`);
 			return;
@@ -674,6 +683,8 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 		let code: string;
 		try {
 			code = await startLoopbackServer(port);
+			console.log('[CalendarBridge] Auth code received, length:', code.length);
+			new Notice('Calendar Bridge: Code received, exchanging for tokens…');
 		} catch (err) {
 			new Notice(`Calendar Bridge: Authorization failed — ${(err as Error).message}`);
 			return;
@@ -681,9 +692,11 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 
 		try {
 			await adapter.exchangeCodeForTokens(code, port);
+			console.log('[CalendarBridge] Token exchange succeeded, accessToken:', !!g.accessToken);
 			new Notice('Calendar Bridge: Google Calendar authorized ✓');
 			this.display();
 		} catch (err) {
+			console.error('[CalendarBridge] exchangeCodeForTokens threw:', err);
 			new Notice(`Calendar Bridge: Token exchange failed — ${(err as Error).message}`);
 		}
 	}
