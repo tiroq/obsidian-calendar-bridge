@@ -161,13 +161,111 @@ function startLoopbackServer(port: number): Promise<string> {
 					const code = reqUrl.searchParams.get('code');
 					const error = reqUrl.searchParams.get('error');
 
-					res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-					res.end(
-						'<html><body style="font-family:sans-serif;padding:2em">' +
-						'<h2>Calendar Bridge — authorization complete.</h2>' +
-						'<p>You may close this tab and return to Obsidian.</p>' +
-						'</body></html>',
-					);
+				res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+				res.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calendar Bridge — Authorized</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0d1117;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    color: #e6edf3;
+    padding: 24px;
+  }
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 40px 48px;
+    max-width: 440px;
+    width: 100%;
+    text-align: center;
+    animation: fadeUp .35s cubic-bezier(.16,1,.3,1) both;
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .icon {
+    width: 56px;
+    height: 56px;
+    background: #1a7f37;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 24px;
+    animation: pop .4s .2s cubic-bezier(.34,1.56,.64,1) both;
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: scale(.4); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  .icon svg { display: block; }
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.25;
+    color: #e6edf3;
+    margin-bottom: 8px;
+  }
+  p {
+    font-size: 14px;
+    color: #8b949e;
+    line-height: 1.6;
+  }
+  .divider {
+    border: none;
+    border-top: 1px solid #21262d;
+    margin: 28px 0;
+  }
+  .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: #58a6ff;
+    text-decoration: none;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .back:hover { text-decoration: underline; color: #79c0ff; }
+  .wordmark {
+    font-size: 12px;
+    color: #484f58;
+    margin-top: 32px;
+    letter-spacing: .02em;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M4 12.6L9 17.6L20 6.4" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <h1>Authorization successful</h1>
+    <p>Calendar Bridge is now connected to your Google Calendar. You may close this tab and return to Obsidian.</p>
+    <hr class="divider">
+    <button class="back" onclick="window.close()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      Close this tab
+    </button>
+    <p class="wordmark">Calendar Bridge for Obsidian</p>
+  </div>
+</body>
+</html>`);
 					server.close();
 
 					if (code) resolve(code);
