@@ -1,0 +1,151 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  PLUGIN_ID: obsidian-calendar-bridge
+
+tasks:
+  # ── Dependencies ─────────────────────────────────────────────────────────────
+
+  install:
+    desc: Install npm dependencies
+    cmds:
+      - npm install
+
+  # ── Development ──────────────────────────────────────────────────────────────
+
+  dev:
+    desc: Start esbuild in watch mode (outputs main.js to project root)
+    cmds:
+      - npm run dev
+
+  # ── Quality ──────────────────────────────────────────────────────────────────
+
+  test:
+    desc: Run all Jest tests
+    cmds:
+      - npm test
+
+  test:watch:
+    desc: Run Jest in watch mode
+    cmds:
+      - npm test -- --watch
+
+  lint:
+    desc: Run ESLint on src/
+    cmds:
+      - npx eslint src/ --ext .ts
+
+  typecheck:
+    desc: Run TypeScript type-checker without emitting files
+    cmds:
+      - npx tsc --noEmit
+
+  # ── Build ─────────────────────────────────────────────────────────────────────
+
+  build:
+    desc: Production build (minified, outputs main.js)
+    cmds:
+      - npm run build
+
+  # ── Release helpers ───────────────────────────────────────────────────────────
+
+  _bump:
+    desc: Internal — bump version in package.json / manifest.json / versions.json
+    internal: true
+    vars:
+      NEW_VERSION:
+        sh: node -e "
+          const pkg  = require('./package.json');
+          const parts = pkg.version.split('.').map(Number);
+          if ('{{.BUMP}}' === 'patch') { parts[2]++; }
+          else if ('{{.BUMP}}' === 'minor') { parts[1]++; parts[2]=0; }
+          else if ('{{.BUMP}}' === 'major') { parts[0]++; parts[1]=0; parts[2]=0; }
+          console.log(parts.join('.'));
+          "
+    cmds:
+      # Update package.json
+      - node -e "
+          const fs=require('fs');
+          const p=JSON.parse(fs.readFileSync('package.json'));
+          p.version='{{.NEW_VERSION}}';
+          fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');
+          "
+      # Update manifest.json
+      - node -e "
+          const fs=require('fs');
+          const m=JSON.parse(fs.readFileSync('manifest.json'));
+          m.version='{{.NEW_VERSION}}';
+          fs.writeFileSync('manifest.json',JSON.stringify(m,null,2)+'\n');
+          "
+      # Update versions.json (add new entry preserving existing)
+      - node -e "
+          const fs=require('fs');
+          const m=JSON.parse(fs.readFileSync('manifest.json'));
+          let v={};
+          try{ v=JSON.parse(fs.readFileSync('versions.json')); }catch(e){}
+          v['{{.NEW_VERSION}}']=m.minAppVersion;
+          fs.writeFileSync('versions.json',JSON.stringify(v,null,2)+'\n');
+          "
+      - echo "Bumped to {{.NEW_VERSION}}"
+
+  release:patch:
+    desc: Bump patch version, build, commit, and tag
+    cmds:
+      - task: _bump
+        vars: { BUMP: patch }
+      - task: _commit-and-tag
+
+  release:minor:
+    desc: Bump minor version, build, commit, and tag
+    cmds:
+      - task: _bump
+        vars: { BUMP: minor }
+      - task: _commit-and-tag
+
+  release:major:
+    desc: Bump major version, build, commit, and tag
+    cmds:
+      - task: _bump
+        vars: { BUMP: major }
+      - task: _commit-and-tag
+
+  _commit-and-tag:
+    desc: Internal — build, commit version bump, and create git tag
+    internal: true
+    vars:
+      VERSION:
+        sh: node -e "console.log(require('./package.json').version)"
+    cmds:
+      - task: build
+      - git add package.json manifest.json versions.json main.js
+      - git commit -m "chore: bump version to {{.VERSION}}"
+      - git tag {{.VERSION}}
+      - echo "Tagged {{.VERSION}} — run: git push origin main --tags"
+
+  # ── GitHub Release ───────────────────────────────────────────────────────────
+
+  gh-release:
+    desc: Create a GitHub Release for the current version (requires gh CLI)
+    vars:
+      VERSION:
+        sh: node -e "console.log(require('./package.json').version)"
+    cmds:
+      - |
+        ASSETS="main.js manifest.json"
+        if [ -f styles.css ]; then ASSETS="$ASSETS styles.css"; fi
+        gh release create {{.VERSION}} $ASSETS \
+          --title "v{{.VERSION}}" \
+          --notes "See CHANGELOG.md for details."
+      - echo "Released v{{.VERSION}} on GitHub."
+
+  # ── Convenience ──────────────────────────────────────────────────────────────
+
+  ci:
+    desc: Full CI pipeline (lint + typecheck + test + build)
+    cmds:
+      - task: lint
+      - task: typecheck
+      - task: test
+      - task: build
