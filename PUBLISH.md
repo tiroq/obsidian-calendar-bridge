@@ -81,7 +81,7 @@ or to install a specific version directly.
 
 ### Step-by-step
 
-1. Go to the [Releases page](https://github.com/YOUR_GITHUB_USERNAME/obsidian-calendar-bridge/releases).
+1. Go to the [Releases page](https://github.com/tiroq/obsidian-calendar-bridge/releases).
 2. Open the latest release (or the version you want).
 3. Under **Assets**, download:
    - `main.js`
@@ -117,9 +117,9 @@ you should see all five commands listed.
    {
      "id": "obsidian-calendar-bridge",
      "name": "Calendar Bridge",
-     "author": "<your name>",
+     "author": "Tiroq",
      "description": "Connect Google Calendar or ICS feeds and auto-generate structured meeting drafts.",
-     "repo": "<your-github-username>/obsidian-calendar-bridge"
+     "repo": "tiroq/obsidian-calendar-bridge"
    }
    ```
 3. Open a PR to `obsidianmd/obsidian-releases`
