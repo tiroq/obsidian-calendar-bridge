@@ -72,6 +72,36 @@ const AUTH_URL  = 'https://accounts.google.com/o/oauth2/v2/auth';
 const REDIRECT_URI_LOOPBACK = (port: number) => `http://127.0.0.1:${port}/callback`;
 const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
 
+/**
+ * Public OAuth 2.0 client ID bundled with the plugin.
+ * Registered as a "desktop" app (loopback redirect) — no client secret required.
+ * PKCE (S256) is used for security instead of a client secret.
+ */
+const BUILT_IN_CLIENT_ID =
+	'311576802090-2pk2uaba2tikkkdlpv1i5k3k1qsa7jhb.apps.googleusercontent.com';
+
+// ─── PKCE helpers ─────────────────────────────────────────────────────────────
+
+function base64urlEncode(buf: Uint8Array): string {
+	return btoa(String.fromCharCode(...buf))
+		.replace(/\+/g, '-')
+		.replace(/\//g, '_')
+		.replace(/=/g, '');
+}
+
+/** Generate a PKCE code_verifier (96 random bytes → 128-char base64url string). */
+function generateCodeVerifier(): string {
+	const arr = new Uint8Array(96);
+	crypto.getRandomValues(arr);
+	return base64urlEncode(arr);
+}
+
+/** Derive the PKCE code_challenge = BASE64URL(SHA-256(verifier)). */
+async function generateCodeChallenge(verifier: string): Promise<string> {
+	const data = new TextEncoder().encode(verifier);
+	const digest = await crypto.subtle.digest('SHA-256', data);
+	return base64urlEncode(new Uint8Array(digest));
+}
 // ─── Google Source Adapter ────────────────────────────────────────────────────
 
 export class GoogleCalendarAdapter implements CalendarSourceAdapter {
@@ -86,6 +116,8 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 
 	private settings: GoogleApiSettings;
 	private onSettingsUpdate: (updated: GoogleApiSettings) => Promise<void>;
+	/** Pending PKCE code_verifier for the in-flight authorization request. */
+	private pendingCodeVerifier?: string;
 
 	constructor(opts: {
 		id: string;
@@ -190,28 +222,44 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 
 	// ─── OAuth flow ──────────────────────────────────────────────────────────
 
+
 	/**
-	 * Build the authorization URL for the user to visit.
+	 * Async version that generates the PKCE challenge and returns the auth URL.
 	 */
-	getAuthorizationUrl(port: number): string {
+	async getAuthorizationUrlAsync(port: number): Promise<string> {
+		const verifier = generateCodeVerifier();
+		this.pendingCodeVerifier = verifier;
+		const challenge = await generateCodeChallenge(verifier);
+
 		const url = new URL(AUTH_URL);
-		url.searchParams.set('client_id', this.settings.clientId);
+		url.searchParams.set('client_id', BUILT_IN_CLIENT_ID);
 		url.searchParams.set('redirect_uri', REDIRECT_URI_LOOPBACK(port));
 		url.searchParams.set('response_type', 'code');
 		url.searchParams.set('scope', SCOPES.join(' '));
 		url.searchParams.set('access_type', 'offline');
 		url.searchParams.set('prompt', 'select_account consent');
+		url.searchParams.set('code_challenge', challenge);
+		url.searchParams.set('code_challenge_method', 'S256');
 		return url.toString();
 	}
 
 	/**
 	 * Exchange an authorization code for tokens and persist them.
 	 */
+	/**
+	 * Exchange an authorization code for tokens using PKCE (no client secret).
+	 */
 	async exchangeCodeForTokens(code: string, port: number): Promise<void> {
+		if (!this.pendingCodeVerifier) {
+			throw new Error('No pending PKCE verifier. Call getAuthorizationUrlAsync() first.');
+		}
+		const verifier = this.pendingCodeVerifier;
+		this.pendingCodeVerifier = undefined;
+
 		const body = new URLSearchParams({
 			code,
-			client_id: this.settings.clientId,
-			client_secret: this.settings.clientSecret,
+			client_id: BUILT_IN_CLIENT_ID,
+			code_verifier: verifier,
 			redirect_uri: REDIRECT_URI_LOOPBACK(port),
 			grant_type: 'authorization_code',
 		});
@@ -276,8 +324,7 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 
 	private async refreshAccessToken(): Promise<void> {
 		const body = new URLSearchParams({
-			client_id: this.settings.clientId,
-			client_secret: this.settings.clientSecret,
+			client_id: BUILT_IN_CLIENT_ID,
 			refresh_token: this.settings.refreshToken!,
 			grant_type: 'refresh_token',
 		});

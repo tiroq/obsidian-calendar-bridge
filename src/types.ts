@@ -96,8 +96,6 @@ export interface SyncCache {
 // ─── Settings (global) ────────────────────────────────────────────────────────
 
 export interface GoogleApiSettings {
-	clientId: string;
-	clientSecret: string;
 	/** Stored access token (encrypted where possible) */
 	accessToken?: string;
 	refreshToken?: string;

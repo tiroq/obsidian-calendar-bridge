@@ -98,8 +98,6 @@ class FileSuggest extends AbstractInputSuggest<TFile> {
 
 function defaultGoogle(): GoogleApiSettings {
 	return {
-		clientId: '',
-		clientSecret: '',
 		accessToken: undefined,
 		refreshToken: undefined,
 		tokenExpiry: undefined,
@@ -424,34 +422,6 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 			return;
 		}
 
-		new Setting(wrapper)
-			.setName('Client ID')
-			.setDesc('From Google Cloud Console → Credentials → OAuth 2.0 Client ID.')
-			.addText(t =>
-				t
-					.setPlaceholder('….apps.googleusercontent.com')
-					.setValue(g.clientId)
-					.onChange(async v => {
-						g.clientId = v.trim();
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(wrapper)
-			.setName('Client Secret')
-			.setDesc('⚠ Stored in plain text in this vault. Keep this vault private.')
-			.addText(t => {
-				t
-					.setPlaceholder('GOCSPX-…')
-					.setValue(g.clientSecret)
-					.onChange(async v => {
-						g.clientSecret = v.trim();
-						await this.plugin.saveSettings();
-					});
-				// Mask the input
-				t.inputEl.type = 'password';
-			});
-
 		// Auth status line
 		const authStatus = g.accessToken
 			? (g.tokenExpiry
@@ -469,10 +439,6 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					.setButtonText(g.accessToken ? 'Re-authorize' : 'Authorize')
 					.setCta()
 					.onClick(async () => {
-						if (!g.clientId || !g.clientSecret) {
-							new Notice('Calendar Bridge: Enter Client ID and Client Secret first.');
-							return;
-						}
 						await this.startOAuthFlow(source);
 					}),
 			)
@@ -576,13 +542,16 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	 * Starts an OAuth 2.0 authorization code flow using the system browser +
 	 * a loopback HTTP server (no copy-paste required).
 	 */
+	/**
+	 * Starts an OAuth 2.0 PKCE authorization code flow using the system browser +
+	 * a loopback HTTP server (no copy-paste, no client secret required).
+	 */
 	private async startOAuthFlow(source: CalendarSourceConfig): Promise<void> {
 		if (!source.google) return;
 		const g = source.google;
 
 		const port = randomPort();
 
-		// Build adapter just to get the auth URL
 		const adapter = new GoogleCalendarAdapter({
 			id: source.id,
 			name: source.name,
@@ -593,7 +562,13 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 			},
 		});
 
-		const authUrl = adapter.getAuthorizationUrl(port);
+		let authUrl: string;
+		try {
+			authUrl = await adapter.getAuthorizationUrlAsync(port);
+		} catch (err) {
+			new Notice(`Calendar Bridge: Failed to build auth URL — ${(err as Error).message}`);
+			return;
+		}
 
 		new Notice('Calendar Bridge: Opening browser for Google authorization…');
 		openExternalUrl(authUrl);
