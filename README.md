@@ -103,15 +103,22 @@ draft: true
 
 ---
 
-## 🔒 Privacy & Security
+## Privacy & Data Handling
 
-- Read-only calendar access
-- No data sent to developer servers
-- OAuth scopes limited to calendar read access
-- ICS secret URLs treated as sensitive
-- Optional redaction mode (hide attendees/links)
+Calendar Bridge uses Google OAuth (read-only) to access your calendar events.
 
-All processing happens locally inside your Vault.
+The plugin:
+
+- Requests only calendar.readonly scope
+- Reads event metadata (title, time, attendees, conference links)
+- Does NOT modify calendar events
+- Does NOT send any data to developer servers
+- Stores tokens locally on the user's device
+- Performs all processing inside the Obsidian vault
+
+No analytics, telemetry, or external tracking is included.
+
+Calendar Bridge operates entirely locally. The developer does not collect, store, or process user data.
 
 ---
 
