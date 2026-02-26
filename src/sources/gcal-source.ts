@@ -78,7 +78,7 @@ const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
  * PKCE (S256) is used for security instead of a client secret.
  */
 const BUILT_IN_CLIENT_ID =
-	'311576802090-2pk2uaba2tikkkdlpv1i5k3k1qsa7jhb.apps.googleusercontent.com';
+	'219902639557-gjehvj82qffd1tq9bkqsm7711eebda6n.apps.googleusercontent.com';
 
 // ─── PKCE helpers ─────────────────────────────────────────────────────────────
 
