@@ -244,9 +244,6 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 	}
 
 	/**
-	 * Exchange an authorization code for tokens and persist them.
-	 */
-	/**
 	 * Exchange an authorization code for tokens using PKCE (no client secret).
 	 */
 	async exchangeCodeForTokens(code: string, port: number): Promise<void> {
@@ -264,15 +261,22 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 			grant_type: 'authorization_code',
 		});
 
-		const resp = await requestUrl({
-			url: TOKEN_URL,
-			method: 'POST',
-			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-			body: body.toString(),
-		});
+		let resp: { status: number; text: string; json: unknown };
+		try {
+			resp = await requestUrl({
+				url: TOKEN_URL,
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: body.toString(),
+				throw: false,
+			});
+		} catch (err) {
+			throw new Error(`Token exchange network error: ${(err as Error).message}`);
+		}
 
 		if (resp.status !== 200) {
-			throw new Error(`Token exchange failed: ${resp.status} ${resp.text}`);
+			console.error('[CalendarBridge] Token exchange failed', resp.status, resp.text);
+			throw new Error(`Token exchange failed (${resp.status}): ${resp.text}`);
 		}
 
 		const tokens = resp.json as TokenResponse;
