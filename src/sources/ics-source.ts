@@ -7,7 +7,7 @@
 
 import { requestUrl } from 'obsidian';
 import { AttendeeInfo, IcsCacheEntry, NormalizedEvent, SourceType } from '../types';
-import { parseAndFilterEvents, ParsedICSEvent } from '../ics-parser';
+import { parseAndFilterEvents, ParsedICSEvent, extractMeetingLinks } from '../ics-parser';
 import { CalendarSourceAdapter, SourceCapabilities, computeSeriesKey } from './adapter';
 
 // ─── ICS Source Adapter ───────────────────────────────────────────────────────
@@ -118,9 +118,11 @@ export class IcsSourceAdapter implements CalendarSourceAdapter {
 			isRecurring: e.isRecurring,
 		});
 
-		// Best-effort conference URL from location or description
-		const conferenceUrl = extractConferenceUrl(e.location) ??
-			extractConferenceUrl(e.description ?? '') ?? undefined;
+		// Best-effort conference URL + Teams URL from free-text description + location
+		const freeText = [e.location, e.description].filter(Boolean).join(' ');
+		const extracted = freeText ? extractMeetingLinks(freeText) : {};
+		const conferenceUrl = extracted.meetingUrl;
+		const teamsUrl = extracted.teamsUrl;
 
 		// Determine timezone — ICS doesn't give us the TZID easily here,
 		// but we preserve it as empty to let rendering fall back to default
@@ -159,6 +161,8 @@ export class IcsSourceAdapter implements CalendarSourceAdapter {
 			description: e.description || undefined,
 			location: e.location || undefined,
 			conferenceUrl,
+			teamsUrl,
+			meetingUrl: conferenceUrl,  // meetingUrl mirrors conferenceUrl for ICS
 			attendees: attendees.length > 0 ? attendees : undefined,
 			organizer,
 			sourceName: this.name,

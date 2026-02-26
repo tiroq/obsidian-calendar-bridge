@@ -4,27 +4,33 @@
  * Renders all plugin settings including:
  *   - Calendar source management (ICS / Google OAuth)
  *   - Sync options (horizon, auto-sync, startup)
- *   - Path / folder options
+ *   - Path / folder options (with FolderSuggest / FileSuggest)
  *   - Format options
  *   - Feature toggles
  *   - Privacy options
  */
 
 import {
+	AbstractInputSuggest,
 	App,
+	Modal,
 	Notice,
 	Platform,
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	TFile,
+	TFolder,
 } from 'obsidian';
 import {
 	CalendarSourceConfig,
 	GoogleApiSettings,
 	IcsSourceSettings,
+	NormalizedEvent,
 	PluginSettings,
 	SourceType,
 } from './types';
+import { GoogleCalendarAdapter } from './sources/gcal-source';
 
 // Re-export so main.ts can import from a single settings module
 export type { PluginSettings };
@@ -37,6 +43,55 @@ interface CalendarBridgePluginLike extends Plugin {
 	settings: PluginSettings;
 	saveSettings(): Promise<void>;
 	triggerSync(): Promise<void>;
+}
+
+// ─── Folder / File suggest ─────────────────────────────────────────────────────
+
+class FolderSuggest extends AbstractInputSuggest<TFolder> {
+	constructor(app: App, private inputEl: HTMLInputElement) {
+		super(app, inputEl);
+	}
+
+	getSuggestions(query: string): TFolder[] {
+		const lq = query.toLowerCase();
+		return this.app.vault.getAllLoadedFiles()
+			.filter((f): f is TFolder => f instanceof TFolder)
+			.filter(f => f.path.toLowerCase().includes(lq))
+			.slice(0, 20);
+	}
+
+	renderSuggestion(folder: TFolder, el: HTMLElement): void {
+		el.setText(folder.path);
+	}
+
+	selectSuggestion(folder: TFolder): void {
+		this.setValue(folder.path);
+		this.inputEl.dispatchEvent(new Event('input'));
+		this.close();
+	}
+}
+
+class FileSuggest extends AbstractInputSuggest<TFile> {
+	constructor(app: App, private inputEl: HTMLInputElement) {
+		super(app, inputEl);
+	}
+
+	getSuggestions(query: string): TFile[] {
+		const lq = query.toLowerCase();
+		return this.app.vault.getMarkdownFiles()
+			.filter(f => f.path.toLowerCase().includes(lq))
+			.slice(0, 20);
+	}
+
+	renderSuggestion(file: TFile, el: HTMLElement): void {
+		el.setText(file.path);
+	}
+
+	selectSuggestion(file: TFile): void {
+		this.setValue(file.path);
+		this.inputEl.dispatchEvent(new Event('input'));
+		this.close();
+	}
 }
 
 // ─── Default sub-configs ───────────────────────────────────────────────────────
@@ -69,6 +124,107 @@ function newSource(type: SourceType): CalendarSourceConfig {
 	};
 	if (type === 'gcal_api') return { ...base, google: defaultGoogle() };
 	return { ...base, ics: defaultIcs() };
+}
+
+// ─── Loopback OAuth helpers ───────────────────────────────────────────────────
+
+/** Open a URL in the system browser via Electron shell, fallback to window.open. */
+function openExternalUrl(url: string): void {
+	try {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const electron = (window as any).require?.('electron');
+		if (electron?.shell?.openExternal) {
+			void electron.shell.openExternal(url);
+			return;
+		}
+	} catch { /* fall through */ }
+	window.open(url, '_blank');
+}
+
+/**
+ * Spin up a local HTTP server on the given port, wait for the OAuth redirect
+ * containing ?code=…, close the server, and return the code.
+ * Times out after 5 minutes.
+ */
+function startLoopbackServer(port: number): Promise<string> {
+	return new Promise((resolve, reject) => {
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const http = (window as any).require?.('http');
+			if (!http) {
+				reject(new Error('Node http module unavailable (desktop only).'));
+				return;
+			}
+
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const server = http.createServer((req: any, res: any) => {
+				try {
+					const reqUrl = new URL(req.url as string, `http://127.0.0.1:${port}`);
+					const code = reqUrl.searchParams.get('code');
+					const error = reqUrl.searchParams.get('error');
+
+					res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+					res.end(
+						'<html><body style="font-family:sans-serif;padding:2em">' +
+						'<h2>Calendar Bridge — authorization complete.</h2>' +
+						'<p>You may close this tab and return to Obsidian.</p>' +
+						'</body></html>',
+					);
+					server.close();
+
+					if (code) resolve(code);
+					else reject(new Error(error ?? 'OAuth cancelled or no code received.'));
+				} catch (e) {
+					reject(e as Error);
+				}
+			});
+
+			server.listen(port, '127.0.0.1');
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			server.on('error', (err: any) => reject(err as Error));
+
+			// 5-minute timeout
+			const timer = setTimeout(() => {
+				server.close();
+				reject(new Error('OAuth timed out after 5 minutes.'));
+			}, 5 * 60 * 1000);
+
+			// Allow Node process to exit even if timer is pending
+			if (timer.unref) timer.unref();
+		} catch (e) {
+			reject(e as Error);
+		}
+	});
+}
+
+/** Pick a random port in the ephemeral range 49152–65535. */
+function randomPort(): number {
+	return Math.floor(Math.random() * (65535 - 49152 + 1)) + 49152;
+}
+
+// ─── Preview events modal ─────────────────────────────────────────────────────
+
+class PreviewEventsModal extends Modal {
+	constructor(app: App, private lines: string[]) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.createEl('h3', { text: 'Upcoming events (next 7 days)' });
+		if (this.lines.length === 0) {
+			contentEl.createEl('p', { text: 'No events found in the next 7 days.' });
+		} else {
+			const ul = contentEl.createEl('ul');
+			for (const line of this.lines) {
+				ul.createEl('li', { text: line });
+			}
+		}
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
 }
 
 // ─── Settings Tab ──────────────────────────────────────────────────────────────
@@ -296,14 +452,18 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 				t.inputEl.type = 'password';
 			});
 
-		// Token status
-		const tokenStatus = g.accessToken
-			? `✓ Authorized${g.tokenExpiry ? ' (expires ' + new Date(g.tokenExpiry).toLocaleString() + ')' : ''}`
+		// Auth status line
+		const authStatus = g.accessToken
+			? (g.tokenExpiry
+				? (Date.now() < g.tokenExpiry
+					? `✓ Authorized (expires ${new Date(g.tokenExpiry).toLocaleString()})`
+					: `↻ Token present but expired — re-authorize`)
+				: '✓ Authorized')
 			: '✗ Not authorized';
 
-		new Setting(wrapper)
+		const authSetting = new Setting(wrapper)
 			.setName('Authorization')
-			.setDesc(tokenStatus)
+			.setDesc(authStatus)
 			.addButton(btn =>
 				btn
 					.setButtonText(g.accessToken ? 'Re-authorize' : 'Authorize')
@@ -331,6 +491,76 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					}),
 			);
 
+		// Test Connection button
+		authSetting.addButton(btn =>
+			btn
+				.setButtonText('Test Connection')
+				.setDisabled(!g.accessToken)
+				.onClick(async () => {
+					if (!g.accessToken) return;
+					btn.setDisabled(true).setButtonText('Testing…');
+					try {
+						const adapter = new GoogleCalendarAdapter({
+							id: 'test',
+							name: 'test',
+							settings: g,
+							onSettingsUpdate: async () => { /* no-op */ },
+						});
+						const result = await adapter.testConnection();
+						new Notice(result.ok
+							? `Calendar Bridge: ${result.message}`
+							: `Calendar Bridge: Connection failed — ${result.message}`);
+					} finally {
+						btn.setDisabled(false).setButtonText('Test Connection');
+					}
+				}),
+		);
+
+		// Preview upcoming events button
+		new Setting(wrapper)
+			.setName('Preview upcoming events')
+			.setDesc('Fetch and display the next 5 events from all selected calendars (requires authorization).')
+			.addButton(btn =>
+				btn
+					.setButtonText('Preview')
+					.setDisabled(!g.accessToken)
+					.onClick(async () => {
+						if (!g.accessToken) return;
+						btn.setDisabled(true).setButtonText('Loading…');
+						try {
+							const adapter = new GoogleCalendarAdapter({
+								id: 'preview',
+								name: 'preview',
+								settings: g,
+								onSettingsUpdate: async (updated) => {
+									Object.assign(g, updated);
+									await this.plugin.saveSettings();
+								},
+							});
+							const cals = await adapter.listCalendars();
+							const now = new Date();
+							const weekLater = new Date(now.getTime() + 7 * 24 * 3600 * 1000);
+							const allEvents: NormalizedEvent[] = [];
+							for (const cal of cals.slice(0, 3)) { // limit to 3 cals for preview
+								const evts = await adapter.listEvents(cal.id, now, weekLater);
+								allEvents.push(...evts);
+							}
+							allEvents.sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+							const top5 = allEvents.slice(0, 5);
+							const lines = top5.map(e => {
+								const d = e.startDate.toLocaleDateString();
+								const t = e.isAllDay ? 'All day' : e.startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+								return `${d} ${t} — ${e.title}`;
+							});
+							new PreviewEventsModal(this.app, lines).open();
+						} catch (err) {
+							new Notice(`Calendar Bridge: Preview failed — ${(err as Error).message}`);
+						} finally {
+							btn.setDisabled(false).setButtonText('Preview');
+						}
+					}),
+			);
+
 		new Setting(wrapper)
 			.setName('Include conference data')
 			.setDesc('Fetch Google Meet / Zoom join links from event conferenceData.')
@@ -343,111 +573,46 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	}
 
 	/**
-	 * Starts a simplified OAuth 2.0 authorization code flow using the system browser.
-	 * The user pastes the redirect URL back into a prompt.
+	 * Starts an OAuth 2.0 authorization code flow using the system browser +
+	 * a loopback HTTP server (no copy-paste required).
 	 */
 	private async startOAuthFlow(source: CalendarSourceConfig): Promise<void> {
 		if (!source.google) return;
 		const g = source.google;
 
-		const redirectUri = 'urn:ietf:wg:oauth:2.0:oob';
-		const scope = encodeURIComponent(
-			'https://www.googleapis.com/auth/calendar.readonly',
-		);
-		const authUrl =
-			`https://accounts.google.com/o/oauth2/v2/auth` +
-			`?client_id=${encodeURIComponent(g.clientId)}` +
-			`&redirect_uri=${encodeURIComponent(redirectUri)}` +
-			`&response_type=code` +
-			`&scope=${scope}` +
-			`&access_type=offline` +
-			`&prompt=consent`;
+		const port = randomPort();
 
-		// Open in browser
-		window.open(authUrl, '_blank');
+		// Build adapter just to get the auth URL
+		const adapter = new GoogleCalendarAdapter({
+			id: source.id,
+			name: source.name,
+			settings: g,
+			onSettingsUpdate: async (updated) => {
+				Object.assign(g, updated);
+				await this.plugin.saveSettings();
+			},
+		});
 
-		// Ask user to paste the code
-		const code = await this.promptForInput(
-			'Paste the authorization code from Google here:',
-		);
-		if (!code) return;
+		const authUrl = adapter.getAuthorizationUrl(port);
+
+		new Notice('Calendar Bridge: Opening browser for Google authorization…');
+		openExternalUrl(authUrl);
+
+		let code: string;
+		try {
+			code = await startLoopbackServer(port);
+		} catch (err) {
+			new Notice(`Calendar Bridge: Authorization failed — ${(err as Error).message}`);
+			return;
+		}
 
 		try {
-			const resp = await fetch('https://oauth2.googleapis.com/token', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-				body: new URLSearchParams({
-					code,
-					client_id: g.clientId,
-					client_secret: g.clientSecret,
-					redirect_uri: redirectUri,
-					grant_type: 'authorization_code',
-				}).toString(),
-			});
-
-			if (!resp.ok) {
-				const err = await resp.text();
-				new Notice(`Calendar Bridge: OAuth failed — ${err}`);
-				return;
-			}
-
-			const data = await resp.json() as {
-				access_token: string;
-				refresh_token?: string;
-				expires_in?: number;
-			};
-
-			g.accessToken = data.access_token;
-			if (data.refresh_token) g.refreshToken = data.refresh_token;
-			if (data.expires_in) g.tokenExpiry = Date.now() + data.expires_in * 1000;
-
-			await this.plugin.saveSettings();
+			await adapter.exchangeCodeForTokens(code, port);
 			new Notice('Calendar Bridge: Google Calendar authorized ✓');
 			this.display();
 		} catch (err) {
-			new Notice(`Calendar Bridge: OAuth error — ${(err as Error).message}`);
+			new Notice(`Calendar Bridge: Token exchange failed — ${(err as Error).message}`);
 		}
-	}
-
-	/** Shows a modal-like prompt using a simple browser dialog. */
-	private promptForInput(message: string): Promise<string | null> {
-		return new Promise(resolve => {
-			// Use a simple modal overlay built into the settings panel
-			const overlay = document.body.createDiv({ cls: 'calendar-bridge-prompt' });
-			overlay.style.cssText =
-				'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
-
-			const box = overlay.createDiv();
-			box.style.cssText =
-				'background:var(--background-primary);padding:24px;border-radius:8px;min-width:400px;max-width:600px;';
-
-			box.createEl('p', { text: message });
-			const input = box.createEl('input', { type: 'text' });
-			input.style.cssText = 'width:100%;margin:8px 0 16px;';
-			input.placeholder = 'Paste code here…';
-
-			const btnRow = box.createDiv();
-			btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
-
-			const cancelBtn = btnRow.createEl('button', { text: 'Cancel' });
-			const okBtn = btnRow.createEl('button', { text: 'OK' });
-			okBtn.style.cssText = 'background:var(--interactive-accent);color:var(--text-on-accent);border:none;padding:4px 12px;border-radius:4px;cursor:pointer;';
-
-			const finish = (value: string | null): void => {
-				overlay.remove();
-				resolve(value);
-			};
-
-			cancelBtn.addEventListener('click', () => finish(null));
-			okBtn.addEventListener('click', () => finish(input.value.trim() || null));
-			input.addEventListener('keydown', e => {
-				if (e.key === 'Enter') finish(input.value.trim() || null);
-				if (e.key === 'Escape') finish(null);
-			});
-
-			document.body.appendChild(overlay);
-			input.focus();
-		});
 	}
 
 	// ─── Sync settings ─────────────────────────────────────────────────────────
@@ -455,33 +620,53 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	private renderSyncSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Sync').setHeading();
 
+		// Horizon days — numeric input + Default button
 		new Setting(containerEl)
 			.setName('Sync horizon (days)')
 			.setDesc('How many days ahead of today to fetch and generate notes.')
-			.addSlider(s =>
-				s
-					.setLimits(1, 90, 1)
-					.setValue(this.plugin.settings.horizonDays)
-					.setDynamicTooltip()
-					.onChange(async v => {
-						this.plugin.settings.horizonDays = v;
-						await this.plugin.saveSettings();
-					}),
+			.addText(t => {
+				t.setValue(String(this.plugin.settings.horizonDays));
+				t.inputEl.type = 'number';
+				t.inputEl.min = '1';
+				t.inputEl.max = '60';
+				t.inputEl.style.width = '80px';
+				t.inputEl.addEventListener('blur', async () => {
+					let v = parseInt(t.inputEl.value, 10);
+					if (isNaN(v)) v = 5;
+					v = Math.max(1, Math.min(60, v));
+					t.setValue(String(v));
+					this.plugin.settings.horizonDays = v;
+					await this.plugin.saveSettings();
+				});
+			})
+			.addButton(btn =>
+				btn.setButtonText('Default (5)').onClick(async () => {
+					this.plugin.settings.horizonDays = 5;
+					await this.plugin.saveSettings();
+					new Notice('Calendar Bridge: Sync horizon reset to 5 days.');
+					this.display();
+				}),
 			);
 
+		// Auto-sync interval — numeric input
 		new Setting(containerEl)
 			.setName('Auto-sync interval (minutes)')
 			.setDesc('How often to automatically sync in the background. 0 = disabled.')
-			.addSlider(s =>
-				s
-					.setLimits(0, 1440, 15)
-					.setValue(this.plugin.settings.autoSyncIntervalMinutes)
-					.setDynamicTooltip()
-					.onChange(async v => {
-						this.plugin.settings.autoSyncIntervalMinutes = v;
-						await this.plugin.saveSettings();
-					}),
-			);
+			.addText(t => {
+				t.setValue(String(this.plugin.settings.autoSyncIntervalMinutes));
+				t.inputEl.type = 'number';
+				t.inputEl.min = '0';
+				t.inputEl.max = '1440';
+				t.inputEl.style.width = '80px';
+				t.inputEl.addEventListener('blur', async () => {
+					let v = parseInt(t.inputEl.value, 10);
+					if (isNaN(v)) v = 0;
+					v = Math.max(0, Math.min(1440, v));
+					t.setValue(String(v));
+					this.plugin.settings.autoSyncIntervalMinutes = v;
+					await this.plugin.saveSettings();
+				});
+			});
 
 		new Setting(containerEl)
 			.setName('Sync on startup')
@@ -499,44 +684,47 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	private renderPathsSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Paths').setHeading();
 
-		new Setting(containerEl)
+		// Meetings root — folder suggest
+		const meetingsSetting = new Setting(containerEl)
 			.setName('Meetings root folder')
 			.setDesc('Vault folder where individual meeting notes are created (date sub-folders are created automatically).')
-			.addText(t =>
-				t
-					.setPlaceholder('Meetings')
-					.setValue(this.plugin.settings.meetingsRoot)
-					.onChange(async v => {
-						this.plugin.settings.meetingsRoot = v.trim() || 'Meetings';
-						await this.plugin.saveSettings();
-					}),
-			);
+			.addText(t => {
+				t.setPlaceholder('Meetings').setValue(this.plugin.settings.meetingsRoot);
+				new FolderSuggest(this.app, t.inputEl);
+				t.onChange(async v => {
+					this.plugin.settings.meetingsRoot = v.trim() || 'Meetings';
+					await this.plugin.saveSettings();
+				});
+			});
+		meetingsSetting.controlEl.addClass('calendar-bridge-path-setting');
 
-		new Setting(containerEl)
+		// Series root — folder suggest
+		const seriesSetting = new Setting(containerEl)
 			.setName('Series root folder')
 			.setDesc('Vault folder where recurring-series index pages are created.')
-			.addText(t =>
-				t
-					.setPlaceholder('Meetings/_series')
-					.setValue(this.plugin.settings.seriesRoot)
-					.onChange(async v => {
-						this.plugin.settings.seriesRoot = v.trim() || 'Meetings/_series';
-						await this.plugin.saveSettings();
-					}),
-			);
+			.addText(t => {
+				t.setPlaceholder('Meetings/_series').setValue(this.plugin.settings.seriesRoot);
+				new FolderSuggest(this.app, t.inputEl);
+				t.onChange(async v => {
+					this.plugin.settings.seriesRoot = v.trim() || 'Meetings/_series';
+					await this.plugin.saveSettings();
+				});
+			});
+		seriesSetting.controlEl.addClass('calendar-bridge-path-setting');
 
-		new Setting(containerEl)
+		// Template path — file suggest
+		const templateSetting = new Setting(containerEl)
 			.setName('Template note path')
 			.setDesc('Vault path to a custom note template. Leave blank to use the built-in template.')
-			.addText(t =>
-				t
-					.setPlaceholder('Templates/Meeting.md')
-					.setValue(this.plugin.settings.templatePath)
-					.onChange(async v => {
-						this.plugin.settings.templatePath = v.trim();
-						await this.plugin.saveSettings();
-					}),
-			);
+			.addText(t => {
+				t.setPlaceholder('Templates/Meeting.md').setValue(this.plugin.settings.templatePath);
+				new FileSuggest(this.app, t.inputEl);
+				t.onChange(async v => {
+					this.plugin.settings.templatePath = v.trim();
+					await this.plugin.saveSettings();
+				});
+			});
+		templateSetting.controlEl.addClass('calendar-bridge-path-setting');
 	}
 
 	// ─── Format ────────────────────────────────────────────────────────────────

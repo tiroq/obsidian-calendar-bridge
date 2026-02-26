@@ -42,6 +42,8 @@ export interface NormalizedEvent {
 	description?: string;
 	location?: string;
 	conferenceUrl?: string;
+	teamsUrl?: string;         // Microsoft Teams join link (if found)
+	meetingUrl?: string;       // Best join link (Meet > Zoom > Teams > other)
 	attendees?: AttendeeInfo[];
 	organizer?: string;       // "Name <email>" or just email
 	sourceName: string;       // display name of the calendar

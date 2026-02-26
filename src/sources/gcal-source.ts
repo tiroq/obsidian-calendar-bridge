@@ -8,6 +8,7 @@
  */
 
 import { requestUrl } from 'obsidian';
+import { extractMeetingLinks } from '../ics-parser';
 import {
 	AttendeeInfo,
 	EventStatus,
@@ -68,7 +69,7 @@ interface TokenResponse {
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const AUTH_URL  = 'https://accounts.google.com/o/oauth2/v2/auth';
-const REDIRECT_URI = 'urn:ietf:wg:oauth:2.0:oob';
+const REDIRECT_URI_LOOPBACK = (port: number) => `http://127.0.0.1:${port}/callback`;
 const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
 
 // ─── Google Source Adapter ────────────────────────────────────────────────────
@@ -192,26 +193,26 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 	/**
 	 * Build the authorization URL for the user to visit.
 	 */
-	getAuthorizationUrl(): string {
+	getAuthorizationUrl(port: number): string {
 		const url = new URL(AUTH_URL);
 		url.searchParams.set('client_id', this.settings.clientId);
-		url.searchParams.set('redirect_uri', REDIRECT_URI);
+		url.searchParams.set('redirect_uri', REDIRECT_URI_LOOPBACK(port));
 		url.searchParams.set('response_type', 'code');
 		url.searchParams.set('scope', SCOPES.join(' '));
 		url.searchParams.set('access_type', 'offline');
-		url.searchParams.set('prompt', 'consent');
+		url.searchParams.set('prompt', 'select_account consent');
 		return url.toString();
 	}
 
 	/**
 	 * Exchange an authorization code for tokens and persist them.
 	 */
-	async exchangeCodeForTokens(code: string): Promise<void> {
+	async exchangeCodeForTokens(code: string, port: number): Promise<void> {
 		const body = new URLSearchParams({
 			code,
 			client_id: this.settings.clientId,
 			client_secret: this.settings.clientSecret,
-			redirect_uri: REDIRECT_URI,
+			redirect_uri: REDIRECT_URI_LOOPBACK(port),
 			grant_type: 'authorization_code',
 		});
 
@@ -329,7 +330,7 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 			isRecurring,
 		});
 
-		// Conference URL (prefer video entries)
+		// Conference URL from Google conferenceData (prefer video entry = Meet/Zoom)
 		let conferenceUrl: string | undefined;
 		if (item.conferenceData?.entryPoints) {
 			const video = item.conferenceData.entryPoints.find(
@@ -337,6 +338,14 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 			);
 			conferenceUrl = (video ?? item.conferenceData.entryPoints[0])?.uri;
 		}
+
+		// Extract Teams/Zoom/Meet links from free-text description + location
+		const freeText = [item.description, item.location].filter(Boolean).join(' ');
+		const extracted = freeText ? extractMeetingLinks(freeText) : {};
+		// teamsUrl: from description/location
+		const teamsUrl = extracted.teamsUrl;
+		// meetingUrl priority: conferenceData URL > extracted Meet/Zoom > Teams
+		const meetingUrl = conferenceUrl ?? extracted.meetingUrl;
 
 		// Attendees
 		const attendees: AttendeeInfo[] = (item.attendees ?? [])
@@ -370,8 +379,10 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 			updatedAt: item.updated,
 			description: item.description || undefined,
 			location: item.location || undefined,
-			conferenceUrl,
+			conferenceUrl: meetingUrl,   // backward compat — keeps existing tests green
 			attendees: attendees.length > 0 ? attendees : undefined,
+			teamsUrl,
+			meetingUrl,
 			organizer,
 			sourceName: this.name,
 			recurringEventId: item.recurringEventId,

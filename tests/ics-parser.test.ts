@@ -1,6 +1,7 @@
 import {
 	addDuration,
 	expandRRule,
+	extractMeetingLinks,
 	isSameDay,
 	parseAndFilterEvents,
 	parseICSDate,
@@ -414,5 +415,61 @@ describe('parseAndFilterEvents', () => {
 		const events = parseAndFilterEvents(folded, from, to);
 		expect(events).toHaveLength(1);
 		expect(events[0].title).toBe('Long Title That Has Been Folded');
+	});
+});
+
+// ─── extractMeetingLinks ──────────────────────────────────────────────────────
+
+describe('extractMeetingLinks', () => {
+	it('returns empty object for plain text', () => {
+		const result = extractMeetingLinks('No links here, just regular text.');
+		expect(result.meetingUrl).toBeUndefined();
+		expect(result.teamsUrl).toBeUndefined();
+	});
+
+	it('extracts Google Meet link as meetingUrl', () => {
+		const result = extractMeetingLinks('Join: https://meet.google.com/abc-defg-hij');
+		expect(result.meetingUrl).toBe('https://meet.google.com/abc-defg-hij');
+		expect(result.teamsUrl).toBeUndefined();
+	});
+
+	it('extracts Zoom link as meetingUrl', () => {
+		const result = extractMeetingLinks('Zoom: https://company.zoom.us/j/123456789?pwd=abc');
+		expect(result.meetingUrl).toBe('https://company.zoom.us/j/123456789?pwd=abc');
+		expect(result.teamsUrl).toBeUndefined();
+	});
+
+	it('extracts Teams link as both meetingUrl and teamsUrl when no higher-priority link exists', () => {
+		const url = 'https://teams.microsoft.com/l/meetup-join/19:meeting_abc@thread.v2/0?context=%7B%7D';
+		const result = extractMeetingLinks(`Join: ${url}`);
+		expect(result.meetingUrl).toBe(url);
+		expect(result.teamsUrl).toBe(url);
+	});
+
+	it('prefers Meet over Teams — meetingUrl = Meet, teamsUrl = Teams', () => {
+		const meetUrl = 'https://meet.google.com/xyz-1234-abc';
+		const teamsUrl = 'https://teams.microsoft.com/l/meetup-join/19:meeting_xyz@thread.v2/0?context=%7B%7D';
+		const result = extractMeetingLinks(`Meet: ${meetUrl} Teams: ${teamsUrl}`);
+		expect(result.meetingUrl).toBe(meetUrl);
+		expect(result.teamsUrl).toBe(teamsUrl);
+	});
+
+	it('extracts Teams Live link', () => {
+		const url = 'https://teams.live.com/meet/9876543210';
+		const result = extractMeetingLinks(url);
+		expect(result.meetingUrl).toBe(url);
+		expect(result.teamsUrl).toBe(url);
+	});
+
+	it('extracts WebEx link', () => {
+		const url = 'https://company.webex.com/meet/abc123';
+		const result = extractMeetingLinks(url);
+		expect(result.meetingUrl).toBe(url);
+		expect(result.teamsUrl).toBeUndefined();
+	});
+
+	it('handles HTML-encoded descriptions (common in ICS)', () => {
+		const result = extractMeetingLinks('Join via Teams: https://teams.microsoft.com/l/meetup-join/meeting123');
+		expect(result.teamsUrl).toBe('https://teams.microsoft.com/l/meetup-join/meeting123');
 	});
 });

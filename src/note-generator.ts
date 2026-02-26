@@ -226,6 +226,8 @@ export function buildFrontmatter(
 		}
 		if (event.location)       lines.push(`location: ${yamlString(event.location)}`);
 		if (event.conferenceUrl)  lines.push(`meet_url: ${event.conferenceUrl}`);
+		if (event.teamsUrl)       lines.push(`teams_url: ${event.teamsUrl}`);
+		if (event.meetingUrl)     lines.push(`meeting_url: ${event.meetingUrl}`);
 	}
 
 	if (tags.length > 0) {
@@ -429,6 +431,8 @@ export function fillTemplateNormalized(
 		.replace(/\{\{series_key\}\}/g,       event.seriesKey)
 		.replace(/\{\{location\}\}/g,         event.location ?? '')
 		.replace(/\{\{conference_url\}\}/g,   event.conferenceUrl ?? '')
+		.replace(/\{\{teams_url\}\}/g,      event.teamsUrl ?? '')
+		.replace(/\{\{meeting_url\}\}/g,    event.meetingUrl ?? '')
 		.replace(/\{\{attendees_yaml\}\}/g,   attendeesYaml)
 		.replace(/\{\{agenda_block\}\}/g,     agendaBlock)
 		.replace(/\{\{joiners_block\}\}/g,    joinersBlock)

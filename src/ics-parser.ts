@@ -499,3 +499,51 @@ function rawToPublic(
 		organizerName: raw.organizerName,
 	};
 }
+
+// ─── Meeting link extraction ──────────────────────────────────────────────────
+
+/**
+ * Ordered list of meeting link extractors.
+ * Each entry: [label, regex].
+ * Priority: Google Meet > Zoom > Teams (microsoft.com) > Teams Live > WebEx > other join links.
+ */
+const MEETING_LINK_PATTERNS: Array<{ type: string; pattern: RegExp }> = [
+	{ type: 'meet',  pattern: /https:\/\/meet\.google\.com\/[a-z0-9-]+/i },
+	{ type: 'zoom',  pattern: /https:\/\/[a-z0-9-]+\.zoom\.us\/j\/[\w?=&]+/i },
+	{ type: 'teams', pattern: /https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^\s<"]+/i },
+	{ type: 'teams', pattern: /https:\/\/teams\.live\.com\/meet\/[^\s<"]+/i },
+	{ type: 'teams', pattern: /https:\/\/gov\.teams\.microsoft\.us\/[^\s<"]+/i },
+	{ type: 'webex', pattern: /https:\/\/[a-z0-9-]+\.webex\.com\/[^\s<"]+/i },
+];
+
+export interface ExtractedMeetingLinks {
+	/** The best join URL (highest-priority match). */
+	meetingUrl?: string;
+	/** Microsoft Teams join URL if found. */
+	teamsUrl?: string;
+}
+
+/**
+ * Extract the best meeting/conference join links from free-text (description + location).
+ * Returns meetingUrl (highest-priority) and teamsUrl (if found).
+ */
+export function extractMeetingLinks(text: string): ExtractedMeetingLinks {
+	const result: ExtractedMeetingLinks = {};
+	let bestPriority = Infinity;
+
+	for (let i = 0; i < MEETING_LINK_PATTERNS.length; i++) {
+		const { type, pattern } = MEETING_LINK_PATTERNS[i];
+		const m = text.match(pattern);
+		if (!m) continue;
+		const url = m[0];
+		if (i < bestPriority) {
+			result.meetingUrl = url;
+			bestPriority = i;
+		}
+		if (type === 'teams' && !result.teamsUrl) {
+			result.teamsUrl = url;
+		}
+	}
+
+	return result;
+}
