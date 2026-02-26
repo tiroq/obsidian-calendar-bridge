@@ -1,0 +1,17 @@
+# Obsidian compiled output
+main.js
+main.js.map
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

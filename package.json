@@ -1,0 +1,32 @@
+{
+  "name": "obsidian-calendar-bridge",
+  "version": "1.0.0",
+  "description": "Connect Google Calendar or ICS feeds and auto-generate structured meeting drafts in Obsidian.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "test": "jest"
+  },
+  "keywords": ["obsidian", "calendar", "ics", "google-calendar", "meetings"],
+  "author": "tiroq",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.30",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.20.2",
+    "jest": "^29.7.0",
+    "obsidian": "latest",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.4.3"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.ts"],
+    "moduleNameMapper": {
+      "^obsidian$": "<rootDir>/tests/__mocks__/obsidian.ts"
+    }
+  }
+}

@@ -1,0 +1,396 @@
+import { App, Vault } from './__mocks__/obsidian';
+import { runSync, SyncResult } from '../src/sync-manager';
+import { DEFAULT_SETTINGS, PluginSettings } from '../src/types';
+import { AUTOGEN_START, AUTOGEN_END } from '../src/note-generator';
+
+// ─── Test fixtures ────────────────────────────────────────────────────────────
+
+const NOW = new Date('2024-01-15T00:00:00Z');
+
+function makeSettings(overrides: Partial<PluginSettings> = {}): PluginSettings {
+	return {
+		...DEFAULT_SETTINGS,
+		notesFolder: 'Meetings',
+		seriesFolder: 'Meetings/Series',
+		syncHorizonDays: 14,
+		calendarSources: [
+			{ id: 'src1', name: 'Work Calendar', url: 'http://example.com/cal.ics', enabled: true },
+		],
+		...overrides,
+	};
+}
+
+const ONE_EVENT_ICS = `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:one-off-001@test
+SUMMARY:Project Kickoff
+DESCRIPTION:Initial meeting
+LOCATION:Room 101
+DTSTART:20240115T090000Z
+DTEND:20240115T100000Z
+END:VEVENT
+END:VCALENDAR`;
+
+const RECURRING_ICS = `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:standup-001@test
+SUMMARY:Daily Standup
+DTSTART:20240115T090000Z
+DTEND:20240115T091500Z
+RRULE:FREQ=DAILY;COUNT=3
+END:VEVENT
+END:VCALENDAR`;
+
+const TWO_SOURCES_ICS = `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:personal-001@test
+SUMMARY:Doctor Appointment
+DTSTART:20240116T140000Z
+DTEND:20240116T150000Z
+END:VEVENT
+END:VCALENDAR`;
+
+// Helper: build an App whose vault already holds some content
+function makeApp(files: Record<string, string> = {}): App {
+	const app = new App();
+	for (const [path, content] of Object.entries(files)) {
+		(app.vault as Vault)['files'].set(path, content);
+	}
+	return app;
+}
+
+// ─── Basic create ────────────────────────────────────────────────────────────
+
+describe('runSync — basic event creation', () => {
+	it('creates a note for a single upcoming event', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const fetchFn = async () => ONE_EVENT_ICS;
+
+		const result = await runSync(app as never, settings, fetchFn, NOW);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.created).toBe(1);
+
+		const files = (app.vault as Vault).listFiles();
+		expect(files.some(f => f.includes('Project Kickoff'))).toBe(true);
+	});
+
+	it('note content contains event title, date, and AUTOGEN markers', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		const files = (app.vault as Vault).listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+		const content = (app.vault as Vault).readByPath(notePath)!;
+
+		expect(content).toContain('# Project Kickoff');
+		expect(content).toContain(AUTOGEN_START);
+		expect(content).toContain(AUTOGEN_END);
+		expect(content).toContain('Initial meeting');
+		expect(content).toContain('Room 101');
+	});
+
+	it('places notes in the configured notesFolder', async () => {
+		const app = new App();
+		const settings = makeSettings({ notesFolder: 'Calendar/Notes' });
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		const files = (app.vault as Vault).listFiles();
+		expect(files.every(f => f.startsWith('Calendar/Notes') || f.startsWith('Calendar/'))).toBe(true);
+	});
+
+	it('returns an error (not a throw) when a source fetch fails', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const fetchFn = async () => { throw new Error('Network timeout'); };
+
+		const result = await runSync(app as never, settings, fetchFn, NOW);
+
+		expect(result.errors).toHaveLength(1);
+		expect(result.errors[0]).toContain('Network timeout');
+		expect(result.created).toBe(0);
+	});
+
+	it('skips disabled sources', async () => {
+		const app = new App();
+		const settings = makeSettings({
+			calendarSources: [
+				{ id: 'src1', name: 'Work', url: 'http://x.com/a.ics', enabled: false },
+			],
+		});
+		const fetchFn = jest.fn(async () => ONE_EVENT_ICS);
+
+		const result = await runSync(app as never, settings, fetchFn, NOW);
+
+		expect(fetchFn).not.toHaveBeenCalled();
+		expect(result.created).toBe(0);
+	});
+});
+
+// ─── Idempotent sync ─────────────────────────────────────────────────────────
+
+describe('runSync — idempotency', () => {
+	it('does not create duplicate notes on a second sync', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const fetchFn = async () => ONE_EVENT_ICS;
+
+		await runSync(app as never, settings, fetchFn, NOW);
+		const result2 = await runSync(app as never, settings, fetchFn, NOW);
+
+		// Second sync should not create new files
+		expect(result2.created).toBe(0);
+		// Everything unchanged: skipped
+		expect(result2.updated + result2.skipped).toBeGreaterThanOrEqual(1);
+
+		const files = (app.vault as Vault).listFiles().filter(f => f.endsWith('.md'));
+		const meetingNotes = files.filter(f => f.includes('Project Kickoff'));
+		expect(meetingNotes).toHaveLength(1);
+	});
+
+	it('updates only the AUTOGEN block of an existing note on re-sync', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const fetchFn = async () => ONE_EVENT_ICS;
+
+		// First sync
+		await runSync(app as never, settings, fetchFn, NOW);
+
+		// Simulate the user adding manual notes
+		const files = (app.vault as Vault).listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+		const vault = app.vault as Vault;
+		const original = vault.readByPath(notePath)!;
+		const withManual = original + '\n\n## My Notes\nUser wrote this.';
+		vault['files'].set(notePath, withManual);
+
+		// Second sync
+		await runSync(app as never, settings, fetchFn, NOW);
+
+		const updated = vault.readByPath(notePath)!;
+		expect(updated).toContain('User wrote this.'); // manual content preserved
+		expect(updated).toContain(AUTOGEN_START);       // AUTOGEN block still there
+	});
+
+	it('preserves content outside AUTOGEN block across multiple syncs', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const fetchFn = async () => ONE_EVENT_ICS;
+
+		await runSync(app as never, settings, fetchFn, NOW);
+
+		const vault = app.vault as Vault;
+		const files = vault.listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+
+		// Add a section before and after the AUTOGEN block
+		const current = vault.readByPath(notePath)!;
+		const injected = current.replace(
+			AUTOGEN_START,
+			'**Pre-autogen manual note**\n\n' + AUTOGEN_START,
+		) + '\n\n**Post-autogen manual note**';
+		vault['files'].set(notePath, injected);
+
+		await runSync(app as never, settings, fetchFn, NOW);
+
+		const final = vault.readByPath(notePath)!;
+		expect(final).toContain('**Pre-autogen manual note**');
+		expect(final).toContain('**Post-autogen manual note**');
+	});
+});
+
+// ─── Recurring events & series pages ────────────────────────────────────────
+
+describe('runSync — recurring events and series pages', () => {
+	it('creates one meeting note per occurrence', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		await runSync(app as never, settings, async () => RECURRING_ICS, NOW);
+
+		const vault = app.vault as Vault;
+		const meetingNotes = vault.listFiles().filter(f =>
+			f.startsWith('Meetings/') && f.includes('Daily Standup') && !f.includes('Series'),
+		);
+		expect(meetingNotes).toHaveLength(3);
+	});
+
+	it('creates a series index page for recurring events', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		await runSync(app as never, settings, async () => RECURRING_ICS, NOW);
+
+		const vault = app.vault as Vault;
+		const seriesFiles = vault.listFiles().filter(f =>
+			f.startsWith('Meetings/Series/'),
+		);
+		expect(seriesFiles).toHaveLength(1);
+		expect(seriesFiles[0]).toContain('Daily Standup');
+	});
+
+	it('series page contains wikilinks to each meeting note', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		await runSync(app as never, settings, async () => RECURRING_ICS, NOW);
+
+		const vault = app.vault as Vault;
+		const seriesPath = vault.listFiles().find(f => f.startsWith('Meetings/Series/'))!;
+		const content = vault.readByPath(seriesPath)!;
+
+		expect(content).toContain('[[');
+		expect(content).toContain('Daily Standup');
+	});
+
+	it('meeting notes for recurring events contain a series cross-link', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		await runSync(app as never, settings, async () => RECURRING_ICS, NOW);
+
+		const vault = app.vault as Vault;
+		const meetingNote = vault
+			.listFiles()
+			.filter(f => f.includes('Daily Standup') && !f.includes('Series'))[0];
+		const content = vault.readByPath(meetingNote)!;
+
+		expect(content).toContain('[[Daily Standup]]');
+	});
+
+	it('does not create a series page for non-recurring events', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		const vault = app.vault as Vault;
+		const seriesFiles = vault.listFiles().filter(f => f.startsWith('Meetings/Series/'));
+		expect(seriesFiles).toHaveLength(0);
+	});
+
+	it('updates the series page AUTOGEN block without removing manual series notes', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const fetchFn = async () => RECURRING_ICS;
+
+		await runSync(app as never, settings, fetchFn, NOW);
+
+		const vault = app.vault as Vault;
+		const seriesPath = vault.listFiles().find(f => f.startsWith('Meetings/Series/'))!;
+
+		// Simulate user adding a series-level note
+		const original = vault.readByPath(seriesPath)!;
+		vault['files'].set(seriesPath, original + '\n\n## Series Notes\nAdded by user.');
+
+		// Re-sync
+		await runSync(app as never, settings, fetchFn, NOW);
+
+		const updated = vault.readByPath(seriesPath)!;
+		expect(updated).toContain('Added by user.');  // manual content preserved
+		expect(updated).toContain(AUTOGEN_START);
+	});
+});
+
+// ─── Multiple sources ────────────────────────────────────────────────────────
+
+describe('runSync — multiple calendar sources', () => {
+	it('syncs events from all enabled sources', async () => {
+		const app = new App();
+		const settings = makeSettings({
+			calendarSources: [
+				{ id: 'src1', name: 'Work', url: 'http://x.com/work.ics', enabled: true },
+				{ id: 'src2', name: 'Personal', url: 'http://x.com/personal.ics', enabled: true },
+			],
+		});
+
+		const fetchFn = async (url: string) => {
+			if (url.includes('work')) return ONE_EVENT_ICS;
+			if (url.includes('personal')) return TWO_SOURCES_ICS;
+			return 'BEGIN:VCALENDAR\nEND:VCALENDAR';
+		};
+
+		const result = await runSync(app as never, settings, fetchFn, NOW);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.created).toBe(2);
+
+		const vault = app.vault as Vault;
+		const files = vault.listFiles();
+		expect(files.some(f => f.includes('Project Kickoff'))).toBe(true);
+		expect(files.some(f => f.includes('Doctor Appointment'))).toBe(true);
+	});
+
+	it('includes source name in the meeting note', async () => {
+		const app = new App();
+		const settings = makeSettings({
+			calendarSources: [
+				{ id: 'src1', name: 'My Work Cal', url: 'http://x.com/work.ics', enabled: true },
+			],
+		});
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		const vault = app.vault as Vault;
+		const notePath = vault.listFiles().find(f => f.includes('Project Kickoff'))!;
+		const content = vault.readByPath(notePath)!;
+		expect(content).toContain('My Work Cal');
+	});
+});
+
+// ─── Edge cases ───────────────────────────────────────────────────────────────
+
+describe('runSync — edge cases', () => {
+	it('returns early with no errors when no sources are configured', async () => {
+		const app = new App();
+		const settings = makeSettings({ calendarSources: [] });
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.created).toBe(0);
+	});
+
+	it('ignores events outside the sync horizon', async () => {
+		const app = new App();
+		// 1-day horizon: range is [Jan 15 00:00, Jan 16 00:00); event at 09:00 on Jan 15 qualifies
+		const settings = makeSettings({ syncHorizonDays: 1 });
+		const fetchFn = async () => ONE_EVENT_ICS; // event is on Jan 15 = today
+
+		const result = await runSync(app as never, settings, fetchFn, NOW);
+		expect(result.created).toBeGreaterThanOrEqual(1);
+	});
+
+	it('handles an empty ICS feed gracefully', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const result = await runSync(
+			app as never,
+			settings,
+			async () => 'BEGIN:VCALENDAR\nEND:VCALENDAR',
+			NOW,
+		);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.created).toBe(0);
+	});
+
+	it('partial source failure does not abort the entire sync', async () => {
+		const app = new App();
+		const settings = makeSettings({
+			calendarSources: [
+				{ id: 'src1', name: 'Good', url: 'http://x.com/good.ics', enabled: true },
+				{ id: 'src2', name: 'Bad', url: 'http://x.com/bad.ics', enabled: true },
+			],
+		});
+
+		const fetchFn = async (url: string) => {
+			if (url.includes('bad')) throw new Error('Connection refused');
+			return ONE_EVENT_ICS;
+		};
+
+		const result = await runSync(app as never, settings, fetchFn, NOW);
+
+		expect(result.errors).toHaveLength(1);
+		expect(result.errors[0]).toContain('Bad');
+		expect(result.created).toBe(1); // good source still worked
+	});
+});
