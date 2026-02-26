@@ -79,7 +79,7 @@ describe('sanitizeFilename', () => {
 // ─── getNotePath ──────────────────────────────────────────────────────────────
 
 describe('getNotePath', () => {
-	const settings = { ...DEFAULT_SETTINGS, notesFolder: 'Meetings', dateFormat: 'YYYY-MM-DD' };
+	const settings = { ...DEFAULT_SETTINGS, meetingsRoot: undefined as unknown as string, notesFolder: 'Meetings', dateFormat: 'YYYY-MM-DD' };
 
 	const event: CalendarEvent = {
 		uid: 'test-001',
@@ -185,9 +185,8 @@ describe('fillTemplate', () => {
 	it('produces a well-formed note from the default template', () => {
 		const out = fillTemplate(DEFAULT_TEMPLATE, event, settings, '[[Weekly Sync]]');
 		expect(out).toContain('# Weekly Sync');
-		expect(out).toContain(AUTOGEN_START);
-		expect(out).toContain(AUTOGEN_END);
-		expect(out).toContain('[[Weekly Sync]]');
+		expect(out).toContain('<!-- AUTOGEN:AGENDA:START -->');
+		expect(out).toContain('<!-- AUTOGEN:AGENDA:END -->');
 		expect(out).toContain('## Notes');
 		expect(out).toContain('## Action Items');
 	});

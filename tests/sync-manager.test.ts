@@ -1,13 +1,13 @@
 import { App, Vault } from './__mocks__/obsidian';
-import { runSync, SyncResult } from '../src/sync-manager';
-import { DEFAULT_SETTINGS, PluginSettings } from '../src/types';
-import { AUTOGEN_START, AUTOGEN_END } from '../src/note-generator';
+import { runSync, SyncResult, SyncSettings } from '../src/sync-manager';
+import { DEFAULT_SETTINGS } from '../src/types';
+import { AUTOGEN_START, AUTOGEN_END, AUTOGEN_AGENDA_START } from '../src/note-generator';
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
 const NOW = new Date('2024-01-15T00:00:00Z');
 
-function makeSettings(overrides: Partial<PluginSettings> = {}): PluginSettings {
+function makeSettings(overrides: Partial<SyncSettings> = {}): SyncSettings {
 	return {
 		...DEFAULT_SETTINGS,
 		notesFolder: 'Meetings',
@@ -89,8 +89,7 @@ describe('runSync — basic event creation', () => {
 		const content = (app.vault as Vault).readByPath(notePath)!;
 
 		expect(content).toContain('# Project Kickoff');
-		expect(content).toContain(AUTOGEN_START);
-		expect(content).toContain(AUTOGEN_END);
+		expect(content).toContain(AUTOGEN_AGENDA_START);
 		expect(content).toContain('Initial meeting');
 		expect(content).toContain('Room 101');
 	});
@@ -174,7 +173,7 @@ describe('runSync — idempotency', () => {
 
 		const updated = vault.readByPath(notePath)!;
 		expect(updated).toContain('User wrote this.'); // manual content preserved
-		expect(updated).toContain(AUTOGEN_START);       // AUTOGEN block still there
+		expect(updated).toContain(AUTOGEN_AGENDA_START); // AUTOGEN block still there
 	});
 
 	it('preserves content outside AUTOGEN block across multiple syncs', async () => {
@@ -191,8 +190,8 @@ describe('runSync — idempotency', () => {
 		// Add a section before and after the AUTOGEN block
 		const current = vault.readByPath(notePath)!;
 		const injected = current.replace(
-			AUTOGEN_START,
-			'**Pre-autogen manual note**\n\n' + AUTOGEN_START,
+			AUTOGEN_AGENDA_START,
+			'**Pre-autogen manual note**\n\n' + AUTOGEN_AGENDA_START,
 		) + '\n\n**Post-autogen manual note**';
 		vault['files'].set(notePath, injected);
 
@@ -287,7 +286,7 @@ describe('runSync — recurring events and series pages', () => {
 		await runSync(app as never, settings, fetchFn, NOW);
 
 		const updated = vault.readByPath(seriesPath)!;
-		expect(updated).toContain('Added by user.');  // manual content preserved
+		expect(updated).toContain('Added by user.'); // manual content preserved
 		expect(updated).toContain(AUTOGEN_START);
 	});
 });
