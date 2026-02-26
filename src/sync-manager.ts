@@ -16,7 +16,6 @@ import { App, TFile, requestUrl } from 'obsidian';
 import { NormalizedEvent, PluginSettings } from './types';
 import { parseAndFilterEvents } from './ics-parser';
 import {
-	AUTOGEN_START,
 	DEFAULT_TEMPLATE,
 	AUTOGEN_AGENDA_START,
 	fillTemplateNormalized,

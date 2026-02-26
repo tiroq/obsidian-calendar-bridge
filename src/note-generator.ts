@@ -246,7 +246,7 @@ function buildTags(event: NormalizedEvent, profile?: SeriesProfile): string[] {
 }
 
 function yamlString(val: string): string {
-	if (/[:#\[\]{},&*?|<>=!%@`'"]/.test(val) || /^\d/.test(val)) {
+	if (/[:#[\]{},&*?|<>=!%@`'"]/.test(val) || /^\d/.test(val)) {
 		return `"${val.replace(/"/g, '\\"')}"`;
 	}
 	return val;

@@ -12,8 +12,8 @@
  *   • Sync preview modal
  */
 
-import { App, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
-import { DEFAULT_SETTINGS, NormalizedEvent, PluginSettings, SubscriptionsState } from './types';
+import { Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { DEFAULT_SETTINGS, PluginSettings, SubscriptionsState } from './types';
 import { CalendarBridgeSettingsTab } from './settings';
 import { runSync, SyncResult } from './sync-manager';
 import { SeriesModal, SeriesModalPlugin } from './modals/series-modal';
@@ -22,7 +22,6 @@ import {
 	StateManager,
 	PersistedState,
 	loadPersistedState,
-	emptySubscriptions,
 } from './state/state-manager';
 
 // ─── Plugin ────────────────────────────────────────────────────────────────────
