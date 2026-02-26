@@ -74,6 +74,41 @@ Or create the release manually on GitHub with the same three files attached.
 
 ---
 
+## Manual Installation (from GitHub Release)
+
+Use this method to install without waiting for Obsidian Community Plugin approval,
+or to install a specific version directly.
+
+### Step-by-step
+
+1. Go to the [Releases page](https://github.com/YOUR_GITHUB_USERNAME/obsidian-calendar-bridge/releases).
+2. Open the latest release (or the version you want).
+3. Under **Assets**, download:
+   - `main.js`
+   - `manifest.json`
+4. In your Obsidian vault, create the plugin folder:
+   ```
+   <vault-root>/.obsidian/plugins/obsidian-calendar-bridge/
+   ```
+   > On macOS/Linux the `.obsidian/` folder may be hidden. Use `Cmd+Shift+.` in Finder or `ls -a` in terminal.
+5. Copy both downloaded files into that folder.
+6. Open Obsidian → **Settings → Community Plugins**.
+   - If prompted, turn off **Restricted Mode**.
+7. Find **Calendar Bridge** in the installed plugins list and enable it.
+8. Configure at least one calendar source under **Settings → Calendar Bridge**.
+
+### Updating manually
+
+Repeat steps 1–5 with the new release files, then reload Obsidian (Ctrl/Cmd+R).
+
+### Verifying the install
+
+After enabling, open the command palette (Ctrl/Cmd+P) and search for `Calendar Bridge` —
+you should see all five commands listed.
+
+---
+
+
 ## First submission to the Obsidian Community Plugin list
 
 1. Fork https://github.com/obsidianmd/obsidian-releases

@@ -119,10 +119,12 @@ tasks:
         sh: node -e "console.log(require('./package.json').version)"
     cmds:
       - task: build
-      - git add package.json manifest.json versions.json main.js
-      - git commit -m "chore: bump version to {{.VERSION}}"
-      - git tag {{.VERSION}}
-      - echo "Tagged {{.VERSION}} — run: git push origin main --tags"
+      - |
+        git add package.json manifest.json versions.json
+        git add -f main.js
+        git commit -m "chore: bump version to {{.VERSION}}"
+        git tag {{.VERSION}}
+        echo "Tagged {{.VERSION}} - push with: git push origin main --tags"
 
   # ── GitHub Release ───────────────────────────────────────────────────────────
 
