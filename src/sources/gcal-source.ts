@@ -257,13 +257,15 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 		});
 
 		const bodyStr = body.toString();
+		const requestHeaders = { 'Content-Type': 'application/x-www-form-urlencoded' };
 		console.log('[CalendarBridge] Token exchange body:', bodyStr);
+		console.log('[CalendarBridge] Token exchange headers:', JSON.stringify(requestHeaders));
 		let resp: { status: number; text: string; json: unknown };
 		try {
 			resp = await requestUrl({
 				url: TOKEN_URL,
 				method: 'POST',
-				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				headers: requestHeaders,
 				body: bodyStr,
 				throw: false,
 			});
@@ -277,11 +279,14 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 			// Desktop app clients use PKCE and never require client_secret.
 			let errorBody: { error?: string; error_description?: string } = {};
 			try { errorBody = JSON.parse(resp.text); } catch { /* ignore */ }
-			if (errorBody.error_description?.includes('client_secret is missing')) {
+			if (
+				errorBody.error_description?.includes('client_secret is missing') ||
+				errorBody.error === 'unauthorized_client'
+			) {
 				throw new Error(
 					'Token exchange rejected: your Client ID is a Web application client, not a Desktop app client. ' +
-					'In Google Cloud Console go to APIs & Services → Credentials, ' +
-					'create a new OAuth 2.0 Client ID with Application type “Desktop app”, and use that Client ID instead.',
+					'In Google Cloud Console go to APIs & Services \u2192 Credentials, ' +
+					'create a new OAuth 2.0 Client ID with Application type "Desktop app", and use that Client ID instead.',
 				);
 			}
 			throw new Error(`Token exchange failed (${resp.status}): ${resp.text}`);
