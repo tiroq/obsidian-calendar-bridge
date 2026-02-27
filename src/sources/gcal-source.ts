@@ -14,6 +14,7 @@ import {
 	EventStatus,
 	GoogleApiSettings,
 	NormalizedEvent,
+	RichCalendarItem,
 } from '../types';
 import { CalendarSourceAdapter, SourceCapabilities, computeSeriesKey } from './adapter';
 
@@ -51,6 +52,14 @@ interface GCalListResponse {
 interface GCalCalendar {
 	id: string;
 	summary: string;
+	colorId?: string;
+	backgroundColor?: string;
+	foregroundColor?: string;
+	accessRole?: string;
+	timeZone?: string;
+	primary?: boolean;
+	selected?: boolean;
+	description?: string;
 }
 
 interface GCalCalendarListResponse {
@@ -142,9 +151,9 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 
 	// ─── Calendar list ───────────────────────────────────────────────────────
 
-	async listCalendars(): Promise<Array<{ id: string; name: string }>> {
+	async listCalendars(): Promise<RichCalendarItem[]> {
 		await this.ensureValidToken();
-		const items: Array<{ id: string; name: string }> = [];
+		const items: RichCalendarItem[] = [];
 		let pageToken: string | undefined;
 
 		do {
@@ -158,7 +167,18 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 			});
 			const data = resp.json as GCalCalendarListResponse;
 			for (const cal of data.items ?? []) {
-				items.push({ id: cal.id, name: cal.summary ?? cal.id });
+				items.push({
+					id: cal.id,
+					name: cal.summary ?? cal.id,
+					colorId: cal.colorId,
+					backgroundColor: cal.backgroundColor,
+					foregroundColor: cal.foregroundColor,
+					accessRole: cal.accessRole as RichCalendarItem['accessRole'],
+					timeZone: cal.timeZone,
+					primary: cal.primary,
+					selected: cal.selected,
+					description: cal.description,
+				});
 			}
 			pageToken = data.nextPageToken;
 		} while (pageToken);

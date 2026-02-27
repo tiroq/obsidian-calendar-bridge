@@ -51,6 +51,26 @@ export interface NormalizedEvent {
 	timezone?: string;        // TZID from VEVENT or event timezone
 }
 
+// ─── Rich calendar item (panel calendar list) ──────────────────────────────────
+
+/**
+ * Extended calendar metadata returned by the Google calendarList endpoint.
+ * Used by the control panel to show color dots, access role badges, timezone.
+ */
+export interface RichCalendarItem {
+	id: string;
+	name: string;
+	colorId?: string;
+	backgroundColor?: string;
+	foregroundColor?: string;
+	accessRole?: 'owner' | 'writer' | 'reader' | 'freeBusyReader';
+	timeZone?: string;
+	primary?: boolean;
+	/** Whether the user has this calendar selected in Google Calendar UI. */
+	selected?: boolean;
+	description?: string;
+}
+
 // ─── Series ───────────────────────────────────────────────────────────────────
 
 /**
@@ -75,6 +95,16 @@ export interface SubscriptionsState {
 	version: number;
 	profiles: Record<string, SeriesProfile>; // keyed by seriesKey
 }
+
+// ─── Sync progress ────────────────────────────────────────────────────────────
+
+export type SyncStage =
+	| 'authenticating'
+	| 'fetching-calendars'
+	| 'fetching-events'
+	| 'applying-filters'
+	| 'writing-notes'
+	| 'completed';
 
 // ─── ICS cache entry (persisted to cache.json) ────────────────────────────────
 
@@ -166,6 +196,19 @@ export interface PluginSettings {
 	// Internal
 	lastSyncTime?: string;
 	stateVersion: number;
+
+	// Panel filter settings
+	panelHorizonDays: number;
+	panelIncludeAllDay: boolean;
+	panelIncludeDeclined: boolean;
+	panelOnlyWithAttendees: boolean;
+	panelSkipShorterThanMin: number;  // 0 = disabled
+	panelExtractConferenceLinks: boolean;
+	panelExtractAttendees: boolean;
+	panelExtractLocation: boolean;
+	panelExcludeTitles: string;       // comma-separated keywords
+	panelIncludeTitles: string;       // comma-separated keywords
+	panelTitleRegexMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -186,6 +229,18 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	timeFormat: 'HH:mm',
 	redactionMode: false,
 	stateVersion: 1,
+	// Panel filter defaults
+	panelHorizonDays: 5,
+	panelIncludeAllDay: true,
+	panelIncludeDeclined: false,
+	panelOnlyWithAttendees: false,
+	panelSkipShorterThanMin: 0,
+	panelExtractConferenceLinks: true,
+	panelExtractAttendees: true,
+	panelExtractLocation: true,
+	panelExcludeTitles: '',
+	panelIncludeTitles: '',
+	panelTitleRegexMode: false,
 };
 
 // ─── Legacy compat shim (kept so existing tests import still work) ────────────

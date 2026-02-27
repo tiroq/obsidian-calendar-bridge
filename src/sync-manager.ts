@@ -13,7 +13,7 @@
  */
 
 import { App, TFile, requestUrl } from 'obsidian';
-import { NormalizedEvent, PluginSettings } from './types';
+import { NormalizedEvent, PluginSettings, SyncStage } from './types';
 import { parseAndFilterEvents } from './ics-parser';
 import {
 	DEFAULT_TEMPLATE,
@@ -105,8 +105,10 @@ export async function runSync(
 	settings: SyncSettings,
 	fetchFn: FetchFn = defaultFetch,
 	now: Date = new Date(),
+	onProgress?: (stage: SyncStage, pct: number) => void,
 ): Promise<SyncResult> {
 	const result: SyncResult = { created: 0, updated: 0, skipped: 0, errors: [] };
+	onProgress?.('authenticating', 5);
 
 	// ── Resolve settings with legacy fallbacks ───────────────────────────
 	const horizonDays  = settings.syncHorizonDays ?? settings.horizonDays ?? 3;
@@ -131,6 +133,7 @@ export async function runSync(
 	// ── Fetch & parse all sources ───────────────────────────────────────────
 	const allEvents: NormalizedEvent[] = [];
 
+	onProgress?.('fetching-events', 15);
 	for (const source of allSources) {
 		if (!source.enabled) continue;
 		const url = (source as { url?: string }).url
@@ -235,7 +238,9 @@ export async function runSync(
 		meetingsRoot: usingLegacySources ? undefined : (settings.meetingsRoot ?? notesFolder),
 	};
 
+	onProgress?.('applying-filters', 50);
 	// ── Create / update meeting notes ───────────────────────────────────────
+	onProgress?.('writing-notes', 75);
 	for (const event of allEvents) {
 		const notePath      = getNotePath(event, pathSettings);
 		const seriesPagePath = event.isRecurring
@@ -321,6 +326,7 @@ export async function runSync(
 		}
 	}
 
+	onProgress?.('completed', 100);
 	result.normalizedEvents = allEvents;
 	return result;
 }

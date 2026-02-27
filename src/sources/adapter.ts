@@ -3,7 +3,7 @@
  * All source adapters normalize events to NormalizedEvent.
  */
 
-import { NormalizedEvent, SourceType } from '../types';
+import { NormalizedEvent, RichCalendarItem, SourceType } from '../types';
 
 // ─── Adapter capabilities ──────────────────────────────────────────────────────
 
@@ -25,7 +25,8 @@ export interface CalendarSourceAdapter {
 	testConnection(): Promise<{ ok: boolean; message: string }>;
 
 	/** List available calendars (id + name). */
-	listCalendars(): Promise<Array<{ id: string; name: string }>>;
+	/** List available calendars with rich metadata (color, role, timezone). */
+	listCalendars(): Promise<RichCalendarItem[]>;
 
 	/** Fetch all events whose start falls in [timeMin, timeMax]. */
 	listEvents(
