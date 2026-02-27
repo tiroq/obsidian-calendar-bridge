@@ -96,7 +96,9 @@ export interface SyncCache {
 // ─── Settings (global) ────────────────────────────────────────────────────────
 
 export interface GoogleApiSettings {
-	/** Stored access token (encrypted where possible) */
+	/** OAuth 2.0 Client ID from Google Cloud Console (Desktop app type) */
+	clientId: string;
+	/** Stored access token */
 	accessToken?: string;
 	refreshToken?: string;
 	tokenExpiry?: number;

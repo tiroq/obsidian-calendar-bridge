@@ -98,6 +98,8 @@ class FileSuggest extends AbstractInputSuggest<TFile> {
 
 function defaultGoogle(): GoogleApiSettings {
 	return {
+		clientId: '',
+
 		accessToken: undefined,
 		refreshToken: undefined,
 		tokenExpiry: undefined,
@@ -527,14 +529,31 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 			return;
 		}
 
-		// Auth status line
-		const authStatus = g.accessToken
-			? (g.tokenExpiry
-				? (Date.now() < g.tokenExpiry
-					? `✓ Authorized (expires ${new Date(g.tokenExpiry).toLocaleString()})`
-					: `↻ Token present but expired — re-authorize`)
-				: '✓ Authorized')
-			: '✗ Not authorized';
+		// ── OAuth credentials ──────────────────────────────────────────────────
+		new Setting(wrapper)
+			.setName('Client ID')
+			.setDesc('OAuth 2.0 Client ID from Google Cloud Console (Desktop app type).')
+			.addText(text =>
+				text
+					.setPlaceholder('123456789-abc….apps.googleusercontent.com')
+					.setValue(g.clientId ?? '')
+					.onChange(async v => {
+						g.clientId = v.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+
+		const canAuth = !!g.clientId;
+		const authStatus = !canAuth
+			? '⚠ Enter Client ID above to enable authorization.'
+			: g.accessToken
+				? (g.tokenExpiry
+					? (Date.now() < g.tokenExpiry
+						? `✓ Authorized (expires ${new Date(g.tokenExpiry).toLocaleString()})`
+						: `↻ Token present but expired — re-authorize`)
+					: '✓ Authorized')
+				: '✗ Not authorized';
 
 		const authSetting = new Setting(wrapper)
 			.setName('Authorization')
@@ -543,6 +562,7 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 				btn
 					.setButtonText(g.accessToken ? 'Re-authorize' : 'Authorize')
 					.setCta()
+					.setDisabled(!canAuth)
 					.onClick(async () => {
 						await this.startOAuthFlow(source);
 					}),
@@ -643,17 +663,18 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 			);
 	}
 
-	/**
-	 * Starts an OAuth 2.0 authorization code flow using the system browser +
-	 * a loopback HTTP server (no copy-paste required).
-	 */
+
 	/**
 	 * Starts an OAuth 2.0 PKCE authorization code flow using the system browser +
-	 * a loopback HTTP server (no copy-paste, no client secret required).
+	 * a loopback HTTP server (no client_secret — Desktop app OAuth client).
 	 */
 	private async startOAuthFlow(source: CalendarSourceConfig): Promise<void> {
 		if (!source.google) return;
 		const g = source.google;
+		if (!g.clientId) {
+			new Notice('Calendar Bridge: Enter Client ID in settings first.');
+			return;
+		}
 
 		const port = randomPort();
 		console.log('[CalendarBridge] Starting OAuth flow on port', port);

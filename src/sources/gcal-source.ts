@@ -72,22 +72,12 @@ const AUTH_URL  = 'https://accounts.google.com/o/oauth2/v2/auth';
 const REDIRECT_URI_LOOPBACK = (port: number) => `http://127.0.0.1:${port}/callback`;
 const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
 
-/**
- * OAuth 2.0 client ID bundled with the plugin.
- * Registered as a "desktop" app (loopback redirect).
- * PKCE (S256) is used for security — no client secret is included.
- *
- * NOTE: Google's token endpoint for Desktop clients technically accepts
- * the request without a secret when PKCE is supplied. If token exchange
- * returns 'client_secret is missing', the registered client type must be
- * changed to Web application with http://127.0.0.1 as an allowed redirect.
- */
-const BUILT_IN_CLIENT_ID =
-	'219902639557-gjehvj82qffd1tq9bkqsm7711eebda6n.apps.googleusercontent.com';
 // ─── PKCE helpers ─────────────────────────────────────────────────────────────
 
 function base64urlEncode(buf: Uint8Array): string {
-	return btoa(String.fromCharCode(...buf))
+	let str = '';
+	for (let i = 0; i < buf.length; i++) str += String.fromCharCode(buf[i]);
+	return btoa(str)
 		.replace(/\+/g, '-')
 		.replace(/\//g, '_')
 		.replace(/=/g, '');
@@ -226,7 +216,6 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 
 	// ─── OAuth flow ──────────────────────────────────────────────────────────
 
-
 	/**
 	 * Async version that generates the PKCE challenge and returns the auth URL.
 	 */
@@ -236,7 +225,7 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 		const challenge = await generateCodeChallenge(verifier);
 
 		const url = new URL(AUTH_URL);
-		url.searchParams.set('client_id', BUILT_IN_CLIENT_ID);
+		url.searchParams.set('client_id', this.settings.clientId);
 		url.searchParams.set('redirect_uri', REDIRECT_URI_LOOPBACK(port));
 		url.searchParams.set('response_type', 'code');
 		url.searchParams.set('scope', SCOPES.join(' '));
@@ -248,7 +237,7 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 	}
 
 	/**
-	 * Exchange an authorization code for tokens using PKCE + client secret.
+	 * Exchange an authorization code for tokens using PKCE (no client_secret for Desktop app clients).
 	 */
 	async exchangeCodeForTokens(code: string, port: number): Promise<void> {
 		if (!this.pendingCodeVerifier) {
@@ -259,7 +248,7 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 
 		const body = new URLSearchParams({
 			code,
-			client_id: BUILT_IN_CLIENT_ID,
+			client_id: this.settings.clientId,
 			code_verifier: verifier,
 			redirect_uri: REDIRECT_URI_LOOPBACK(port),
 			grant_type: 'authorization_code',
@@ -332,7 +321,7 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 
 	private async refreshAccessToken(): Promise<void> {
 		const body = new URLSearchParams({
-			client_id: BUILT_IN_CLIENT_ID,
+			client_id: this.settings.clientId,
 			refresh_token: this.settings.refreshToken!,
 			grant_type: 'refresh_token',
 		});
