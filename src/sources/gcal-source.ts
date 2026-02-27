@@ -272,6 +272,18 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 		}
 		if (resp.status !== 200) {
 			console.error('[CalendarBridge] Token exchange failed', resp.status, resp.text);
+			// Detect Web application client misuse: Google returns this when client_secret is
+			// required but absent, which happens exclusively with Web app clients.
+			// Desktop app clients use PKCE and never require client_secret.
+			let errorBody: { error?: string; error_description?: string } = {};
+			try { errorBody = JSON.parse(resp.text); } catch { /* ignore */ }
+			if (errorBody.error_description?.includes('client_secret is missing')) {
+				throw new Error(
+					'Token exchange rejected: your Client ID is a Web application client, not a Desktop app client. ' +
+					'In Google Cloud Console go to APIs & Services → Credentials, ' +
+					'create a new OAuth 2.0 Client ID with Application type “Desktop app”, and use that Client ID instead.',
+				);
+			}
 			throw new Error(`Token exchange failed (${resp.status}): ${resp.text}`);
 		}
 
