@@ -532,7 +532,11 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 		// ── OAuth credentials ──────────────────────────────────────────────────
 		new Setting(wrapper)
 			.setName('Client ID')
-			.setDesc('OAuth 2.0 Client ID from Google Cloud Console (Desktop app type).')
+			.setDesc(
+				'OAuth 2.0 Client ID from Google Cloud Console. ' +
+				'MUST be a Desktop app client (not Web application). ' +
+				'In Google Cloud Console: APIs & Services → Credentials → Create Credentials → OAuth client ID → Application type: Desktop app.'
+			)
 			.addText(text =>
 				text
 					.setPlaceholder('123456789-abc….apps.googleusercontent.com')
