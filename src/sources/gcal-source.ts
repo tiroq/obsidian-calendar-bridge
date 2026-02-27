@@ -73,13 +73,17 @@ const REDIRECT_URI_LOOPBACK = (port: number) => `http://127.0.0.1:${port}/callba
 const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
 
 /**
- * Public OAuth 2.0 client ID bundled with the plugin.
- * Registered as a "desktop" app (loopback redirect) — no client secret required.
- * PKCE (S256) is used for security instead of a client secret.
+ * OAuth 2.0 client ID bundled with the plugin.
+ * Registered as a "desktop" app (loopback redirect).
+ * PKCE (S256) is used for security — no client secret is included.
+ *
+ * NOTE: Google's token endpoint for Desktop clients technically accepts
+ * the request without a secret when PKCE is supplied. If token exchange
+ * returns 'client_secret is missing', the registered client type must be
+ * changed to Web application with http://127.0.0.1 as an allowed redirect.
  */
 const BUILT_IN_CLIENT_ID =
 	'219902639557-gjehvj82qffd1tq9bkqsm7711eebda6n.apps.googleusercontent.com';
-
 // ─── PKCE helpers ─────────────────────────────────────────────────────────────
 
 function base64urlEncode(buf: Uint8Array): string {
@@ -244,7 +248,7 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 	}
 
 	/**
-	 * Exchange an authorization code for tokens using PKCE (no client secret).
+	 * Exchange an authorization code for tokens using PKCE + client secret.
 	 */
 	async exchangeCodeForTokens(code: string, port: number): Promise<void> {
 		if (!this.pendingCodeVerifier) {
