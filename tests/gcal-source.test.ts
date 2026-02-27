@@ -230,6 +230,28 @@ describe('exchangeCodeForTokens — Web client detection', () => {
 		).rejects.toThrow(/Web application client.*Desktop app/i);
 	});
 
+	test('throws clear Desktop-app guidance when Google returns unauthorized_client', async () => {
+		(requestUrl as jest.Mock).mockResolvedValue({
+			status: 401,
+			text: JSON.stringify({
+				error: 'unauthorized_client',
+				error_description: 'The OAuth client was not found.',
+			}),
+			json: {
+				error: 'unauthorized_client',
+				error_description: 'The OAuth client was not found.',
+			},
+		});
+
+		const adapter = makeAdapter();
+		const port = 49212;
+		await adapter.getAuthorizationUrlAsync(port);
+
+		await expect(
+			adapter.exchangeCodeForTokens('bad-code', port),
+		).rejects.toThrow(/Web application client.*Desktop app/i);
+	});
+
 	test('throws generic error for non-client_secret 400 errors', async () => {
 		(requestUrl as jest.Mock).mockResolvedValue({
 			status: 400,
@@ -238,7 +260,7 @@ describe('exchangeCodeForTokens — Web client detection', () => {
 		});
 
 		const adapter = makeAdapter();
-		const port = 49211;
+		const port = 49213;
 		await adapter.getAuthorizationUrlAsync(port);
 
 		await expect(
