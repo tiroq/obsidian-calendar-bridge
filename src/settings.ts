@@ -31,6 +31,7 @@ import {
 	SourceType,
 } from './types';
 import { GoogleCalendarAdapter } from './sources/gcal-source';
+import { maskClientId, parseGoogleCredentialsJson } from './gcal-credentials';
 
 // Re-export so main.ts can import from a single settings module
 export type { PluginSettings };
@@ -529,30 +530,133 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 			return;
 		}
 
-		// ── OAuth credentials ──────────────────────────────────────────────────
+		// ── Credentials file ────────────────────────────────────────────────────
 		new Setting(wrapper)
-			.setName('Client ID')
-			.setDesc(
-				'OAuth 2.0 Client ID from Google Cloud Console. ' +
-				'MUST be a Desktop app client (not Web application). ' +
-				'In Google Cloud Console: APIs & Services → Credentials → Create Credentials → OAuth client ID → Application type: Desktop app.'
-			)
-			.addText(text =>
-				text
-					.setPlaceholder('123456789-abc….apps.googleusercontent.com')
-					.setValue(g.clientId ?? '')
-					.onChange(async v => {
-						g.clientId = v.trim();
-						await this.plugin.saveSettings();
-						// Update Authorize button state immediately without re-rendering
-						if (authBtn) authBtn.setDisabled(!g.clientId);
+			.setName('Google OAuth (Dev / Advanced)')
+			.setHeading();
+
+		wrapper.createEl('p', {
+			text:
+				'Download your OAuth credentials JSON from Google Cloud Console → APIs & Services → Credentials, ' +
+				'then load it below. No manual typing. Credentials are stored locally only.',
+			cls: 'setting-item-description',
+		});
+
+		// File picker + drag-drop zone
+		const dropZone = wrapper.createDiv({ cls: 'calendar-bridge-drop-zone' });
+		dropZone.style.cssText =
+			'border: 2px dashed var(--background-modifier-border);' +
+			'border-radius: 6px;' +
+			'padding: 16px 20px;' +
+			'text-align: center;' +
+			'margin: 8px 0 12px;' +
+			'cursor: pointer;' +
+			'transition: border-color 0.15s, background 0.15s;' +
+			'user-select: none;';
+
+		const dropLabel = dropZone.createEl('p', {
+			text: g.googleCredsFileName
+				? `📄 ${g.googleCredsFileName}  (loaded)`
+				: 'Drag & drop your Google OAuth credentials JSON here',
+			cls: 'setting-item-description',
+		});
+		dropLabel.style.cssText = 'margin: 0; font-size: 13px;';
+
+		const hint = dropZone.createEl('p', {
+			text: g.googleCredsFileName ? '' : 'or click “Choose JSON file…” below',
+			cls: 'setting-item-description',
+		});
+		hint.style.cssText = 'margin: 4px 0 0; font-size: 12px; color: var(--text-faint);';
+
+		// Drag-over visual feedback
+		dropZone.addEventListener('dragover', (e: DragEvent) => {
+			e.preventDefault();
+			dropZone.style.borderColor = 'var(--interactive-accent)';
+			dropZone.style.background = 'var(--background-secondary)';
+			dropLabel.setText('Drop file to load credentials');
+		});
+		dropZone.addEventListener('dragleave', () => {
+			dropZone.style.borderColor = 'var(--background-modifier-border)';
+			dropZone.style.background = '';
+			dropLabel.setText(
+				g.googleCredsFileName
+					? `📄 ${g.googleCredsFileName}  (loaded)`
+					: 'Drag & drop your Google OAuth credentials JSON here',
+			);
+		});
+		dropZone.addEventListener('drop', async (e: DragEvent) => {
+			e.preventDefault();
+			dropZone.style.borderColor = 'var(--background-modifier-border)';
+			dropZone.style.background = '';
+			const file = e.dataTransfer?.files?.[0];
+			if (!file) return;
+			if (!file.name.endsWith('.json')) {
+				new Notice('Calendar Bridge: Only .json files are accepted.');
+				return;
+			}
+			await this.loadCredentialsFile(file, g, source);
+			if (authBtn) authBtn.setDisabled(!g.clientId);
+			this.display();
+		});
+
+		// File picker button row
+		const pickerRow = new Setting(wrapper);
+		pickerRow
+			.addButton(btn =>
+				btn
+					.setButtonText('Choose JSON file…')
+					.onClick(async () => {
+						try {
+							// eslint-disable-next-line @typescript-eslint/no-explicit-any
+							const electron = (window as any).require?.('electron');
+							if (!electron?.remote && !electron?.ipcRenderer) {
+								throw new Error('Electron not available.');
+							}
+							// eslint-disable-next-line @typescript-eslint/no-explicit-any
+							const { dialog } = electron.remote ?? await (electron.ipcRenderer as any).invoke('get-dialog');
+							const result = await dialog.showOpenDialog({
+								properties: ['openFile'],
+								filters: [{ name: 'JSON Credentials', extensions: ['json'] }],
+								title: 'Select Google OAuth Credentials JSON',
+							});
+							if (result.canceled || !result.filePaths[0]) return;
+							const filePath: string = result.filePaths[0];
+							// eslint-disable-next-line @typescript-eslint/no-explicit-any
+							const fs = (window as any).require?.('fs');
+							if (!fs) throw new Error('Node fs not available.');
+							const raw: string = await fs.promises.readFile(filePath, 'utf-8');
+							const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
+							await this.applyCredentialsJson(raw, fileName, g, source);
+							if (authBtn) authBtn.setDisabled(!g.clientId);
+							this.display();
+						} catch (err) {
+							new Notice(`Calendar Bridge: Could not open file — ${(err as Error).message}`);
+						}
 					}),
 			);
 
+		// ── Status fields ────────────────────────────────────────────────────────
+		if (g.googleCredsFileName) {
+			const typeLabel =
+				g.googleClientType === 'installed' ? 'installed (Desktop app)' :
+				g.googleClientType === 'web'       ? 'web (Web application — secret required)' :
+				'unknown';
+			const clientIdMasked = g.clientId ? maskClientId(g.clientId) : '—';
 
+			new Setting(wrapper)
+				.setName('Loaded credentials')
+				.setDesc(
+					`File: ${g.googleCredsFileName} · ` +
+					`Type: ${typeLabel} · ` +
+					`Client ID: ${clientIdMasked} · ` +
+					`Secret: ${g.googleClientSecret ? 'yes' : 'no'}`,
+				);
+		}
+
+		// ── Authorization status ────────────────────────────────────────────────
 		const canAuth = !!g.clientId;
 		const authStatus = !canAuth
-			? '⚠ Enter Client ID above to enable authorization.'
+			? '⚠ Load credentials above to enable authorization.'
 			: g.accessToken
 				? (g.tokenExpiry
 					? (Date.now() < g.tokenExpiry
@@ -586,6 +690,23 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 						g.tokenExpiry = undefined;
 						await this.plugin.saveSettings();
 						new Notice('Calendar Bridge: Token revoked.');
+						this.display();
+					}),
+			)
+			.addButton(btn =>
+				btn
+					.setButtonText('Clear credentials')
+					.setDisabled(!g.googleCredsFileName && !g.clientId)
+					.onClick(async () => {
+						g.clientId = '';
+						g.googleClientSecret = undefined;
+						g.googleClientType = undefined;
+						g.googleCredsFileName = undefined;
+						g.accessToken = undefined;
+						g.refreshToken = undefined;
+						g.tokenExpiry = undefined;
+						await this.plugin.saveSettings();
+						new Notice('Calendar Bridge: Credentials cleared.');
 						this.display();
 					}),
 			);
@@ -640,7 +761,7 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 							const now = new Date();
 							const weekLater = new Date(now.getTime() + 7 * 24 * 3600 * 1000);
 							const allEvents: NormalizedEvent[] = [];
-							for (const cal of cals.slice(0, 3)) { // limit to 3 cals for preview
+							for (const cal of cals.slice(0, 3)) {
 								const evts = await adapter.listEvents(cal.id, now, weekLater);
 								allEvents.push(...evts);
 							}
@@ -669,6 +790,62 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}),
 			);
+	}
+
+	/**
+	 * Load a File object (from drag-drop) and apply parsed credentials.
+	 */
+	private async loadCredentialsFile(
+		file: File,
+		g: GoogleApiSettings,
+		source: CalendarSourceConfig,
+	): Promise<void> {
+		return new Promise((resolve) => {
+			const reader = new FileReader();
+			reader.onload = async (ev) => {
+				const raw = ev.target?.result as string | undefined;
+				if (!raw) {
+					new Notice('Calendar Bridge: Could not read file.');
+					return resolve();
+				}
+				await this.applyCredentialsJson(raw, file.name, g, source);
+				resolve();
+			};
+			reader.onerror = () => {
+				new Notice('Calendar Bridge: File read error.');
+				resolve();
+			};
+			reader.readAsText(file);
+		});
+	}
+
+	/**
+	 * Parse and apply a credentials JSON string to the GoogleApiSettings object.
+	 */
+	private async applyCredentialsJson(
+		raw: string,
+		fileName: string,
+		g: GoogleApiSettings,
+		source: CalendarSourceConfig,
+	): Promise<void> {
+		try {
+			const creds = parseGoogleCredentialsJson(raw);
+			g.clientId = creds.clientId;
+			g.googleClientType = creds.type;
+			g.googleClientSecret = creds.clientSecret;
+			g.googleCredsFileName = fileName;
+			// Write back into the plugin settings array
+			const idx = this.plugin.settings.sources.findIndex(s => s.id === source.id);
+			if (idx !== -1) this.plugin.settings.sources[idx].google = { ...g };
+			await this.plugin.saveSettings();
+			const typeLabel = creds.type === 'installed' ? 'Desktop app' : 'Web application';
+			new Notice(
+				`Calendar Bridge: Credentials loaded — ${typeLabel}` +
+				(creds.clientSecret ? ' (with secret)' : ' (no secret / PKCE only)'),
+			);
+		} catch (err) {
+			new Notice(`Calendar Bridge: Invalid credentials file — ${(err as Error).message}`);
+		}
 	}
 
 
