@@ -23,12 +23,16 @@ import {
 	PersistedState,
 	loadPersistedState,
 } from './state/state-manager';
-
+import {
+	CalendarPanelView,
+	VIEW_TYPE_CALENDAR_PANEL,
+	CalendarBridgePanelPlugin,
+} from './views/panel/CalendarPanelView';
 // ─── Plugin ────────────────────────────────────────────────────────────────────
 
 export default class CalendarBridgePlugin
 	extends Plugin
-	implements SeriesModalPlugin, PreviewModalPlugin
+	implements SeriesModalPlugin, PreviewModalPlugin, CalendarBridgePanelPlugin
 {
 	settings!: PluginSettings;
 
@@ -58,9 +62,15 @@ export default class CalendarBridgePlugin
 		this.statusBarItem = this.addStatusBarItem();
 		this.updateStatusBar();
 
-		// ── Ribbon icon ───────────────────────────────────────────────────────
-		this.addRibbonIcon('calendar-days', 'Calendar Bridge: Sync now', () => {
-			this.triggerSync();
+		// ── Register panel view ─────────────────────────────────────────────
+		this.registerView(
+			VIEW_TYPE_CALENDAR_PANEL,
+			(leaf) => new CalendarPanelView(leaf, this),
+		);
+
+		// ── Ribbon icon ──────────────────────────────────────────────────────
+		this.addRibbonIcon('calendar', 'Calendar Bridge', () => {
+			this.activatePanelView();
 		});
 
 		// ── Commands ──────────────────────────────────────────────────────────
@@ -181,6 +191,28 @@ export default class CalendarBridgePlugin
 				this.triggerCreateNoteForEvent();
 			},
 		});
+	}
+
+
+	// ── Panel view ───────────────────────────────────────────────────────────
+
+		/** Open or focus the Calendar Bridge control panel in the right sidebar. */
+	private async activatePanelView(): Promise<void> {
+		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_CALENDAR_PANEL);
+		if (existing.length > 0) {
+			this.app.workspace.revealLeaf(existing[0]);
+			return;
+		}
+		const leaf = this.app.workspace.getRightLeaf(false);
+		if (!leaf) return;
+		await leaf.setViewState({ type: VIEW_TYPE_CALENDAR_PANEL, active: true });
+		this.app.workspace.revealLeaf(leaf);
+	}
+
+	/** Open the plugin settings tab (required by CalendarBridgePanelPlugin). */
+	openSettings(): void {
+		// @ts-ignore — Obsidian's setting tab opening is not typed in the public API
+		(this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting?.openTabById(this.manifest.id);
 	}
 
 	// ── Sync ─────────────────────────────────────────────────────────────────────
