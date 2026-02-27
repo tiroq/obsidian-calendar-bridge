@@ -233,6 +233,8 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 		url.searchParams.set('prompt', 'select_account consent');
 		url.searchParams.set('code_challenge', challenge);
 		url.searchParams.set('code_challenge_method', 'S256');
+		console.log('[CalendarBridge] PKCE verifier length:', verifier.length, '| challenge:', challenge);
+		console.log('[CalendarBridge] Full auth URL:', url.toString());
 		return url.toString();
 	}
 
@@ -254,19 +256,20 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 			grant_type: 'authorization_code',
 		});
 
+		const bodyStr = body.toString();
+		console.log('[CalendarBridge] Token exchange body:', bodyStr);
 		let resp: { status: number; text: string; json: unknown };
 		try {
 			resp = await requestUrl({
 				url: TOKEN_URL,
 				method: 'POST',
 				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-				body: body.toString(),
+				body: bodyStr,
 				throw: false,
 			});
 		} catch (err) {
 			throw new Error(`Token exchange network error: ${(err as Error).message}`);
 		}
-
 		if (resp.status !== 200) {
 			console.error('[CalendarBridge] Token exchange failed', resp.status, resp.text);
 			throw new Error(`Token exchange failed (${resp.status}): ${resp.text}`);

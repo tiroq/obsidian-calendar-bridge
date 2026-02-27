@@ -540,6 +540,8 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					.onChange(async v => {
 						g.clientId = v.trim();
 						await this.plugin.saveSettings();
+						// Update Authorize button state immediately without re-rendering
+						if (authBtn) authBtn.setDisabled(!g.clientId);
 					}),
 			);
 
@@ -555,18 +557,20 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					: '✓ Authorized')
 				: '✗ Not authorized';
 
+		let authBtn: import('obsidian').ButtonComponent | undefined;
 		const authSetting = new Setting(wrapper)
 			.setName('Authorization')
 			.setDesc(authStatus)
-			.addButton(btn =>
+			.addButton(btn => {
+				authBtn = btn;
 				btn
 					.setButtonText(g.accessToken ? 'Re-authorize' : 'Authorize')
 					.setCta()
 					.setDisabled(!canAuth)
 					.onClick(async () => {
 						await this.startOAuthFlow(source);
-					}),
-			)
+					});
+			})
 			.addButton(btn =>
 				btn
 					.setButtonText('Revoke')
