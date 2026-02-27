@@ -46,6 +46,10 @@ export default class CalendarBridgePlugin
 	/** Status bar element (bottom right). */
 	private statusBarItem!: HTMLElement;
 
+	/** Listeners notified when new series/events are discovered after a sync. */
+	private newCandidatesListeners: Set<(items: import('./types').NormalizedEvent[]) => void> = new Set();
+
+
 	/** Handle returned by setInterval for auto-sync; 0 = not running. */
 	private autoSyncHandle = 0;
 
@@ -133,11 +137,22 @@ export default class CalendarBridgePlugin
 		return this.stateManager.getSubscriptions();
 	}
 
-	async saveSubscriptions(state: SubscriptionsState): Promise<void> {
-		// Sync the full state object into the state manager by replacing all profiles
-		for (const [key, profile] of Object.entries(state.profiles)) {
+	async enableSeries(key: string, name: string): Promise<void> {
+		await this.stateManager.enableSeries(key, name);
+	}
+
+	async disableSeries(key: string): Promise<void> {
+		await this.stateManager.disableSeries(key);
+	}
+
+	async upsertProfile(profile: import('./types').SeriesProfile): Promise<void> {
+		await this.stateManager.upsertProfile(profile);
+	}
+
+	/** Compatibility wrapper for SeriesModal — bulk-replace all profiles. */
+	async saveSubscriptions(state: import('./types').SubscriptionsState): Promise<void> {
+		for (const profile of Object.values(state.profiles)) {
 			await this.stateManager.upsertProfile(profile);
-			void key; // used via upsertProfile
 		}
 	}
 
@@ -231,38 +246,59 @@ export default class CalendarBridgePlugin
 		this.updateStatusBar('Syncing…');
 		new Notice('Calendar Bridge: Syncing…');
 
-		let result: SyncResult;
-		try {
-			result = await runSync(this.app, this.settings);
-		} catch (err) {
-			const msg = (err as Error).message;
-			this.updateStatusBar(`Sync error: ${msg}`, true);
-			new Notice(`Calendar Bridge: Sync failed — ${msg}`);
-			return;
-		}
+	let result: SyncResult;
+	try {
+		// Resolve selectedCalendarIds from the first gcal_api source
+		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
+		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
+		// Pass stateManager.isEnabled so sync respects per-series opt-in.
+		// Returns undefined for unknown keys so they land in newCandidates.
+		const isSeriesEnabled = (key: string): boolean | undefined => {
+			const profile = this.stateManager.getProfile(key);
+			if (!profile) return undefined; // unknown — new candidate
+			return profile.enabled;
+		};
+		result = await runSync(
+			this.app,
+			this.settings,
+			undefined,
+			undefined,
+			undefined,
+			isSeriesEnabled,
+			selectedCalendarIds,
+		);
+	} catch (err) {
+		const msg = (err as Error).message;
+		this.updateStatusBar(`Sync error: ${msg}`, true);
+		new Notice(`Calendar Bridge: Sync failed — ${msg}`);
+		return;
+	}
 
-		// Persist last-sync timestamp
-		this.settings.lastSyncTime = new Date().toLocaleString();
-		await this.saveSettings();
+	// Persist last-sync timestamp
+	this.settings.lastSyncTime = new Date().toLocaleString();
+	await this.saveSettings();
 
-		// Populate series candidates from the sync result
-		this.updateSeriesCandidates(result);
+	// Populate series candidates + notify panel about new discoveries
+	this.updateSeriesCandidates(result);
+	if ((result.newCandidates ?? []).length > 0) {
+		this.onNewCandidates(result.newCandidates!);
+	}
 
-		const { created, updated, skipped, errors } = result;
-		const parts: string[] = [];
-		if (created > 0) parts.push(`${created} created`);
-		if (updated > 0) parts.push(`${updated} updated`);
-		if (skipped > 0) parts.push(`${skipped} unchanged`);
+	const { created, updated, skipped, errors } = result;
+	const parts: string[] = [];
+	if (created > 0) parts.push(`${created} created`);
+	if (updated > 0) parts.push(`${updated} updated`);
+	if (skipped > 0) parts.push(`${skipped} unchanged`);
 
-		const summary = parts.length > 0 ? parts.join(', ') : 'Nothing to do';
-		const errStr = errors.length > 0 ? ` ⚠ ${errors.length} error(s)` : '';
+	const summary = parts.length > 0 ? parts.join(', ') : 'Nothing to do';
+	const errStr = errors.length > 0 ? ` ⚠ ${errors.length} error(s)` : '';
 
-		this.updateStatusBar(`Synced ${new Date().toLocaleTimeString()}`);
-		new Notice(`Calendar Bridge: ${summary}${errStr}`);
+	this.updateStatusBar(`Synced ${new Date().toLocaleTimeString()}`);
+	new Notice(`Calendar Bridge: ${summary}${errStr}`);
 
-		if (errors.length > 0) {
-			console.error('[Calendar Bridge] Sync errors:', errors);
-		}
+	if (errors.length > 0) {
+		console.error('[Calendar Bridge] Sync errors:', errors);
+	}
 	}
 
 	/**
@@ -404,6 +440,22 @@ private async computeSyncPlan(): Promise<SyncPlan> {
 			}
 		}
 	}
+
+	/** Dispatch new candidates to all panel listeners. */
+	private onNewCandidates(items: import('./types').NormalizedEvent[]): void {
+		for (const fn of this.newCandidatesListeners) fn(items);
+	}
+
+	/**
+	 * Subscribe to new-candidate events from sync.
+	 * Returns an unsubscribe function.
+	 */
+	subscribeNewCandidates(fn: (items: import('./types').NormalizedEvent[]) => void): () => void {
+		this.newCandidatesListeners.add(fn);
+		return () => this.newCandidatesListeners.delete(fn);
+	}
+
+	// ── Auto-sync ─────────────────────────────────────────────────────────────────
 
 	// ── Auto-sync ───────────────────────────────────────────────────────────────
 

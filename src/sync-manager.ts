@@ -43,6 +43,11 @@ export interface SyncResult {
 	errors: string[];
 	/** All NormalizedEvents processed in this sync (populated by runSync). */
 	normalizedEvents?: import('./types').NormalizedEvent[];
+	/**
+	 * Events whose seriesKey was not yet in the subscription profiles.
+	 * Populated only when isSeriesEnabled is provided.
+	 */
+	newCandidates?: import('./types').NormalizedEvent[];
 }
 
 /** Signature of the HTTP fetch function (injectable for tests). */
@@ -106,8 +111,18 @@ export async function runSync(
 	fetchFn: FetchFn = defaultFetch,
 	now: Date = new Date(),
 	onProgress?: (stage: SyncStage, pct: number) => void,
+	/**
+	 * Optional per-series enablement check. When provided:
+	 *  - events whose seriesKey returns true are synced normally
+	 *  - events with unknown seriesKeys are collected in result.newCandidates
+	 *  - events whose seriesKey returns false are skipped
+	 * When omitted, all events are synced (legacy / preview mode).
+	 */
+	isSeriesEnabled?: (seriesKey: string) => boolean | undefined,
+	/** When provided, only events from these calendar IDs are synced. */
+	selectedCalendarIds?: string[],
 ): Promise<SyncResult> {
-	const result: SyncResult = { created: 0, updated: 0, skipped: 0, errors: [] };
+	const result: SyncResult = { created: 0, updated: 0, skipped: 0, errors: [], newCandidates: [] };
 	onProgress?.('authenticating', 5);
 
 	// ── Resolve settings with legacy fallbacks ───────────────────────────
@@ -176,7 +191,38 @@ export async function runSync(
 		}
 	}
 
-	if (allEvents.length === 0 && result.errors.length === 0) {
+	// ── Filter by selected calendar IDs ────────────────────────────────────
+	const calendarFilter = selectedCalendarIds && selectedCalendarIds.length > 0
+		? new Set(selectedCalendarIds)
+		: null;
+
+	// ── Filter by series subscription ───────────────────────────────────────
+	const filteredEvents: NormalizedEvent[] = [];
+	for (const event of allEvents) {
+		// Skip if calendar not selected
+		if (calendarFilter && !calendarFilter.has(event.calendarId)) {
+			result.skipped++;
+			continue;
+		}
+		// Apply per-series filter when provided
+		if (isSeriesEnabled && event.seriesKey) {
+			const enabled = isSeriesEnabled(event.seriesKey);
+			if (enabled === undefined) {
+				// Unknown series — add to newCandidates but skip sync
+				result.newCandidates!.push(event);
+				result.skipped++;
+				continue;
+			}
+			if (!enabled) {
+				result.skipped++;
+				continue;
+			}
+		}
+		filteredEvents.push(event);
+	}
+
+	if (filteredEvents.length === 0 && result.errors.length === 0) {
+		result.normalizedEvents = allEvents;
 		return result;
 	}
 
@@ -198,7 +244,7 @@ export async function runSync(
 
 	// ── Build series map ────────────────────────────────────────────────────
 	// groupBySeries still takes CalendarEvent — use a shim
-	const legacyEvents = allEvents.map(e => ({
+	const legacyEvents = filteredEvents.map(e => ({
 		uid:         e.uid,
 		title:       e.title,
 		description: e.description ?? '',
@@ -241,7 +287,7 @@ export async function runSync(
 	onProgress?.('applying-filters', 50);
 	// ── Create / update meeting notes ───────────────────────────────────────
 	onProgress?.('writing-notes', 75);
-	for (const event of allEvents) {
+	for (const event of filteredEvents) {
 		const notePath      = getNotePath(event, pathSettings);
 		const seriesPagePath = event.isRecurring
 			? (() => {

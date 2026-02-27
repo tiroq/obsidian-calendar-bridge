@@ -13,7 +13,7 @@
  */
 
 import { App, ItemView, WorkspaceLeaf } from 'obsidian';
-import { RichCalendarItem, SyncStage } from '../../types';
+import { NormalizedEvent, RichCalendarItem, SeriesProfile, SyncStage } from '../../types';
 import { GoogleCalendarAdapter } from '../../sources/gcal-source';
 import { runSync } from '../../sync-manager';
 import { CalendarStore } from './stores/CalendarStore';
@@ -25,6 +25,7 @@ import { CalendarsSection } from './sections/CalendarsSection';
 import { FiltersSection } from './sections/FiltersSection';
 import { PreviewSection } from './sections/PreviewSection';
 import { HeatmapSection } from './sections/HeatmapSection';
+import { SubscriptionsSection } from './sections/SubscriptionsSection';
 
 export const VIEW_TYPE_CALENDAR_PANEL = 'calendar-bridge-control-panel';
 
@@ -35,6 +36,16 @@ export interface CalendarBridgePanelPlugin {
 	saveSettings(): Promise<void>;
 	/** Open the plugin settings tab. */
 	openSettings(): void;
+	/** Subscribe to new-candidate events from sync. Returns unsubscribe fn. */
+	subscribeNewCandidates(fn: (items: NormalizedEvent[]) => void): () => void;
+	/** Return all subscription profiles. */
+	getSubscriptions(): import('../../types').SubscriptionsState;
+	/** Enable a series/event by key. */
+	enableSeries(key: string, name: string): Promise<void>;
+	/** Disable a series/event by key. */
+	disableSeries(key: string): Promise<void>;
+	/** Upsert a full profile. */
+	upsertProfile(profile: SeriesProfile): Promise<void>;
 }
 
 export class CalendarPanelView extends ItemView {
@@ -49,9 +60,12 @@ export class CalendarPanelView extends ItemView {
 	private statusHeader: StatusHeader | null = null;
 	private syncProgress: SyncProgress | null = null;
 	private calendarsSection: CalendarsSection | null = null;
+	private subscriptionsSection: SubscriptionsSection | null = null;
 	private filtersSection: FiltersSection | null = null;
 	private previewSection: PreviewSection | null = null;
 	private heatmapSection: HeatmapSection | null = null;
+	/** Unsubscribe from new-candidates notifications from main plugin. */
+	private unsubNewCandidates: (() => void) | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: CalendarBridgePanelPlugin) {
 		super(leaf);
@@ -168,27 +182,32 @@ export class CalendarPanelView extends ItemView {
 				this.statusHeader?.updateCalendars(cals);
 			});
 
-			// Kick off initial calendar load; if none are selected yet, auto-select
-			// all and expand the section so the user sees what was loaded.
-			this.calendarStore.refresh().then(async () => {
-				if (!gcalSource.google) return;
-				const cals = this.calendarStore!.getCalendars();
-				const sel = gcalSource.google.selectedCalendarIds ?? [];
-				if (cals.length > 0 && sel.length === 0) {
-					// First-time: select all calendars automatically
-					const ids = cals.map(c => c.id);
-					gcalSource.google.selectedCalendarIds = ids;
-					await this.plugin.saveSettings();
-					this.statusHeader?.updateGcalSettings(gcalSource.google);
-				}
-				// Always expand so user can see and adjust
+			// Kick off initial calendar load and expand section so user sees what loaded.
+			this.calendarStore.refresh().then(() => {
+				// Always expand so user can see and manually select calendars
 				this.calendarsSection?.expand();
 			}).catch(() => {
 				// silently ignore — user may not be authenticated yet
 			});
 		}
+		// ── Subscriptions Section ────────────────────────────────────────
+		if (this.calendarStore) {
+			this.subscriptionsSection = new SubscriptionsSection(scroll, {
+				calendarStore: this.calendarStore,
+				callbacks: {
+					getProfiles: () => this.plugin.getSubscriptions().profiles,
+					enableSeries: (key, name) => this.plugin.enableSeries(key, name),
+					disableSeries: (key) => this.plugin.disableSeries(key),
+					upsertProfile: (profile) => this.plugin.upsertProfile(profile),
+				},
+			});
+			// Subscribe to new candidates from main plugin sync
+			this.unsubNewCandidates = this.plugin.subscribeNewCandidates((items) => {
+				this.subscriptionsSection?.updateCandidates(items);
+			});
+		}
 
-		// ── Filters Section ────────────────────────────────────────────────────
+		// ── Filters Section ──────────────────────────────────────────────────
 		this.filtersSection = new FiltersSection(scroll, this.filterStore);
 
 		// ── Preview Section ────────────────────────────────────────────────────
@@ -205,16 +224,20 @@ export class CalendarPanelView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		this.unsubNewCandidates?.();
 		this.statusHeader?.destroy();
 		this.syncProgress?.destroy();
 		this.calendarsSection?.destroy();
+		this.subscriptionsSection?.destroy();
 		this.filtersSection?.destroy();
 		this.previewSection?.destroy();
 		this.heatmapSection?.destroy();
 
+		this.unsubNewCandidates = null;
 		this.statusHeader = null;
 		this.syncProgress = null;
 		this.calendarsSection = null;
+		this.subscriptionsSection = null;
 		this.filtersSection = null;
 		this.previewSection = null;
 		this.heatmapSection = null;
