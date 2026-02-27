@@ -239,14 +239,24 @@ function startLoopbackServer(port: number): Promise<string> {
     border: none;
     padding: 0;
   }
-  .back:hover { text-decoration: underline; color: #79c0ff; }
+  .back:hover { color: #79c0ff; }
   .wordmark {
     font-size: 12px;
     color: #484f58;
     margin-top: 32px;
     letter-spacing: .02em;
   }
+  .close-hint {
+    font-size: 13px;
+    color: #58a6ff;
+    margin-top: 4px;
+  }
 </style>
+<script>
+  // Attempt auto-close. Works if the tab was opened via window.open();
+  // silently ignored by browsers when opened externally — the text fallback covers that case.
+  try { window.close(); } catch (_) {}
+</script>
 </head>
 <body>
   <div class="card">
@@ -258,10 +268,7 @@ function startLoopbackServer(port: number): Promise<string> {
     <h1>Authorization successful</h1>
     <p>Calendar Bridge is now connected to your Google Calendar. You may close this tab and return to Obsidian.</p>
     <hr class="divider">
-    <button class="back" onclick="window.close()">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      Close this tab
-    </button>
+    <p class="close-hint">You can now close this tab and return to Obsidian.</p>
     <p class="wordmark">Calendar Bridge for Obsidian</p>
   </div>
 </body>
