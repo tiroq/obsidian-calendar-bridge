@@ -98,6 +98,19 @@ export interface SyncCache {
 export interface GoogleApiSettings {
 	/** OAuth 2.0 Client ID from Google Cloud Console (Desktop app type) */
 	clientId: string;
+	/**
+	 * Client type detected from the downloaded credentials JSON.
+	 * 'installed' = Desktop app (no secret required for PKCE).
+	 * 'web' = Web application (secret required).
+	 */
+	googleClientType?: 'installed' | 'web';
+	/**
+	 * client_secret from credentials JSON — included in token exchange only when present.
+	 * Desktop app clients omit this; web clients require it.
+	 */
+	googleClientSecret?: string;
+	/** File name of the last loaded credentials JSON (display only). */
+	googleCredsFileName?: string;
 	/** Stored access token */
 	accessToken?: string;
 	refreshToken?: string;
