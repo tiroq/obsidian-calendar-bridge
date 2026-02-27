@@ -255,6 +255,11 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 			redirect_uri: REDIRECT_URI_LOOPBACK(port),
 			grant_type: 'authorization_code',
 		});
+		// Include client_secret only when present (Web app clients or explicit secret flows).
+		// Desktop app clients using PKCE must NOT send client_secret.
+		if (this.settings.googleClientSecret) {
+			body.set('client_secret', this.settings.googleClientSecret);
+		}
 
 		const bodyStr = body.toString();
 		const requestHeaders = { 'Content-Type': 'application/x-www-form-urlencoded' };
@@ -345,6 +350,10 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 			refresh_token: this.settings.refreshToken!,
 			grant_type: 'refresh_token',
 		});
+		// Include client_secret only when present
+		if (this.settings.googleClientSecret) {
+			body.set('client_secret', this.settings.googleClientSecret);
+		}
 
 		const resp = await requestUrl({
 			url: TOKEN_URL,
