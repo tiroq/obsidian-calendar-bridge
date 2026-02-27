@@ -229,12 +229,12 @@ export class CalendarsSection {
 			}
 
 			// Toggle selection on checkbox change
-			cb.addEventListener('change', () => {
+			cb.addEventListener('change', async () => {
 				const cur = new Set(this.selectedIds());
 				if (cb.checked) cur.add(cal.id);
 				else cur.delete(cal.id);
 				this.opts.gcalSettings.selectedCalendarIds = [...cur];
-				this.opts.onSelectionChange([...cur]);
+				await this.opts.onSelectionChange([...cur]);
 				this.updateSummaryCount();
 			});
 		}
@@ -253,6 +253,17 @@ export class CalendarsSection {
 		await this.opts.onSelectionChange([]);
 		this.renderList();
 		this.updateSummaryCount();
+	}
+
+
+	/** Expand the section (open the details element). */
+	expand(): void {
+		(this.details as HTMLDetailsElement).open = true;
+	}
+
+	/** Scroll the section into view. */
+	scrollIntoView(): void {
+		this.details.scrollIntoView({ behavior: 'smooth', block: 'start' });
 	}
 
 	destroy(): void {

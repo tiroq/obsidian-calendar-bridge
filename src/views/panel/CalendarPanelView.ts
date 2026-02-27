@@ -139,6 +139,10 @@ export class CalendarPanelView extends ItemView {
 				// Reconnect: open settings for user to re-authenticate
 				this.plugin.openSettings();
 			},
+			onSelectCalendars: () => {
+				this.calendarsSection?.expand();
+				this.calendarsSection?.scrollIntoView();
+			},
 		});
 
 		// ── Sync Progress ──────────────────────────────────────────────────────
@@ -164,8 +168,22 @@ export class CalendarPanelView extends ItemView {
 				this.statusHeader?.updateCalendars(cals);
 			});
 
-			// Kick off initial calendar load
-			this.calendarStore.refresh().catch(() => {
+			// Kick off initial calendar load; if none are selected yet, auto-select
+			// all and expand the section so the user sees what was loaded.
+			this.calendarStore.refresh().then(async () => {
+				if (!gcalSource.google) return;
+				const cals = this.calendarStore!.getCalendars();
+				const sel = gcalSource.google.selectedCalendarIds ?? [];
+				if (cals.length > 0 && sel.length === 0) {
+					// First-time: select all calendars automatically
+					const ids = cals.map(c => c.id);
+					gcalSource.google.selectedCalendarIds = ids;
+					await this.plugin.saveSettings();
+					this.statusHeader?.updateGcalSettings(gcalSource.google);
+				}
+				// Always expand so user can see and adjust
+				this.calendarsSection?.expand();
+			}).catch(() => {
 				// silently ignore — user may not be authenticated yet
 			});
 		}

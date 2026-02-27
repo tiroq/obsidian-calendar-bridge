@@ -19,6 +19,8 @@ export interface StatusHeaderOptions {
 	syncStore: SyncStore;
 	onOpenSettings: () => void;
 	onReconnect: () => void;
+	/** Called when user clicks the 'None selected' warning — expand calendars section. */
+	onSelectCalendars?: () => void;
 }
 
 export class StatusHeader {
@@ -96,8 +98,17 @@ export class StatusHeader {
 
 		if (totalCount > 0 && selectedCount === 0) {
 			const warn = calRow.createSpan();
-			warn.style.cssText = 'font-size:11px;color:var(--color-orange);font-weight:600;';
-			warn.setText('⚠ None selected');
+			const hasCallback = !!this.opts.onSelectCalendars;
+			warn.style.cssText = [
+				'font-size:11px',
+				'color:var(--color-orange)',
+				'font-weight:600',
+				hasCallback ? 'cursor:pointer;text-decoration:underline' : '',
+			].join(';');
+			warn.setText('⚠ Select calendars');
+			if (hasCallback) {
+				warn.addEventListener('click', () => this.opts.onSelectCalendars!());
+			}
 		}
 
 		// ── Right: action buttons ───────────────────────────────────────────────
