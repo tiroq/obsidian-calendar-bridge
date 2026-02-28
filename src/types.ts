@@ -148,6 +148,8 @@ export interface GoogleApiSettings {
 	refreshToken?: string;
 	tokenExpiry?: number;
 	selectedCalendarIds: string[];
+	/** Calendar IDs hidden from the Calendars section UI. Hidden calendars are also deselected (not synced). */
+	hiddenCalendarIds?: string[];
 	includeConferenceData: boolean;
 }
 
