@@ -98,6 +98,47 @@ export interface SubscriptionsState {
 	profiles: Record<string, SeriesProfile>; // keyed by seriesKey
 }
 
+// ─── Sync report (diagnostics per sync run) ──────────────────────────────────
+
+export interface SyncReportEntry {
+	stage: string;
+	/** Items processed at this stage (events fetched, notes written, etc). */
+	count: number;
+	/** Optional detail message. */
+	detail?: string;
+}
+
+/**
+ * Structured diagnostic record produced after each sync run.
+ * Stored in memory (last N runs) and surfaced in the Debug panel.
+ */
+export interface SyncReport {
+	/** ISO 8601 timestamp when sync started. */
+	startedAt: string;
+	/** ISO 8601 timestamp when sync completed. */
+	finishedAt: string;
+	/** Duration in milliseconds. */
+	durationMs: number;
+	/** Total events fetched from all sources. */
+	eventsFetched: number;
+	/** Events remaining after filters. */
+	eventsEligible: number;
+	/** Notes that were planned (same as eligible). */
+	notesPlanned: number;
+	/** Notes created. */
+	notesCreated: number;
+	/** Notes updated. */
+	notesUpdated: number;
+	/** Notes skipped (no changes). */
+	notesSkipped: number;
+	/** Errors encountered during sync. */
+	errors: string[];
+	/** Human-readable reason when 0 eligible events. */
+	zeroReason?: string;
+	/** Per-stage entries for detailed breakdown. */
+	entries: SyncReportEntry[];
+}
+
 // ─── Sync progress ────────────────────────────────────────────────────────────
 
 export type SyncStage =
@@ -181,6 +222,8 @@ export interface PluginSettings {
 	meetingsRoot: string;
 	seriesRoot: string;
 	templatePath: string;
+	/** Folder (with subfolders) scanned for Person notes whose frontmatter 'email' field is matched to event attendees. */
+	contactsFolder: string;
 
 	// Features
 	enableSeriesPages: boolean;
@@ -223,6 +266,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	meetingsRoot: 'Meetings',
 	seriesRoot: 'Meetings/_series',
 	templatePath: '',
+	contactsFolder: '',
 	enableSeriesPages: true,
 	enablePrevNextLinks: true,
 	writeStateInVault: false,

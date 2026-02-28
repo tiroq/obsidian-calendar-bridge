@@ -10,6 +10,7 @@
 
 import { NormalizedEvent } from '../../../types';
 import { FilterStore } from '../stores/FilterStore';
+import { getExclusionReason, applyFilters } from '../../../services/FilterService';
 
 export interface PreviewSectionOptions {
 	filterStore: FilterStore;
@@ -30,63 +31,8 @@ function formatEventTime(event: NormalizedEvent): string {
 	}
 }
 
-function applyFilters(event: NormalizedEvent, filters: ReturnType<FilterStore['getState']>): string | null {
-	// Returns null if passes, or a reason string if excluded
-
-	if (!filters.panelIncludeAllDay && event.isAllDay) {
-		return 'All-day excluded';
-	}
-
-	if (!filters.panelIncludeDeclined && event.attendees) {
-		const selfDeclined = event.attendees.some(a => a.responseStatus === 'declined');
-		if (selfDeclined) return 'Declined';
-	}
-
-	if (filters.panelOnlyWithAttendees && (!event.attendees || event.attendees.length === 0)) {
-		return 'No attendees';
-	}
-
-	if (filters.panelSkipShorterThanMin > 0 && !event.isAllDay) {
-		const durationMs = event.endDate.getTime() - event.startDate.getTime();
-		const durationMin = durationMs / 60000;
-		if (durationMin < filters.panelSkipShorterThanMin) {
-			return `< ${filters.panelSkipShorterThanMin} min`;
-		}
-	}
-
-	if (filters.panelExcludeTitles) {
-		const keywords = filters.panelTitleRegexMode
-			? [filters.panelExcludeTitles]
-			: filters.panelExcludeTitles.split(',').map(k => k.trim()).filter(Boolean);
-		for (const kw of keywords) {
-			try {
-				const re = filters.panelTitleRegexMode ? new RegExp(kw, 'i') : null;
-				if (re ? re.test(event.title) : event.title.toLowerCase().includes(kw.toLowerCase())) {
-					return `Excluded: "${kw}"`;
-				}
-			} catch {
-				// Invalid regex — skip
-			}
-		}
-	}
-
-	if (filters.panelIncludeTitles) {
-		const keywords = filters.panelTitleRegexMode
-			? [filters.panelIncludeTitles]
-			: filters.panelIncludeTitles.split(',').map(k => k.trim()).filter(Boolean);
-		const matches = keywords.some(kw => {
-			try {
-				const re = filters.panelTitleRegexMode ? new RegExp(kw, 'i') : null;
-				return re ? re.test(event.title) : event.title.toLowerCase().includes(kw.toLowerCase());
-			} catch {
-				return false;
-			}
-		});
-		if (!matches) return 'Title not in include list';
-	}
-
-	return null;
-}
+// Re-exported for backward compat if any test imports it directly.
+// Business logic lives in FilterService now.
 
 export class PreviewSection {
 	private details: HTMLElement;
@@ -206,17 +152,12 @@ export class PreviewSection {
 			'line-height:1.6',
 		].join(';');
 
-		const included = all.filter(e => applyFilters(e, filters) === null);
-		const exclusions: Record<string, number> = {};
-		for (const e of all) {
-			const r = applyFilters(e, filters);
-			if (r) exclusions[r] = (exclusions[r] ?? 0) + 1;
-		}
+		const { included, exclusionCounts } = applyFilters(all, filters);
 
 		const lines: string[] = [];
 		lines.push(`📋 Fetched: ${all.length} event(s)`);
 		lines.push(`✅ Included: ${included.length}`);
-		for (const [reason, count] of Object.entries(exclusions)) {
+		for (const [reason, count] of Object.entries(exclusionCounts)) {
 			lines.push(`❌ ${reason}: ${count}`);
 		}
 
@@ -246,7 +187,7 @@ export class PreviewSection {
 		const filters = this.opts.filterStore.getState();
 
 		for (const event of this.events) {
-			const reason = applyFilters(event, filters);
+			const reason = getExclusionReason(event, filters);
 			const filtered = reason !== null;
 
 			const row = this.listContainer.createDiv();
