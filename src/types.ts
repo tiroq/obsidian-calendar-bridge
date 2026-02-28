@@ -1,3 +1,5 @@
+import type { TemplateRoute } from './services/TemplateRoutingService';
+
 // ─── Source types ─────────────────────────────────────────────────────────────
 
 export type SourceType = 'gcal_api' | 'ics_public' | 'ics_secret';
@@ -222,6 +224,8 @@ export interface PluginSettings {
 	meetingsRoot: string;
 	seriesRoot: string;
 	templatePath: string;
+	/** Per-calendar / per-domain / per-series template routing rules. */
+	templateRoutes: TemplateRoute[];
 	/** Folder (with subfolders) scanned for Person notes whose frontmatter 'email' field is matched to event attendees. */
 	contactsFolder: string;
 
@@ -266,6 +270,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	meetingsRoot: 'Meetings',
 	seriesRoot: 'Meetings/_series',
 	templatePath: '',
+	templateRoutes: [],
 	contactsFolder: '',
 	enableSeriesPages: true,
 	enablePrevNextLinks: true,
