@@ -661,6 +661,44 @@ describe('fillTemplateNormalized', () => {
 		});
 		expect(out).toBe('Engineering Standup');
 	});
+
+	it('replaces {{date}} with formatted event date', () => {
+		const s = { ...DEFAULT_SETTINGS, dateFormat: 'YYYY-MM-DD' } as PluginSettings;
+		const out = fillTemplateNormalized('{{date}}', {
+			event: makeNormalized({ startDate: new Date(2024, 0, 15, 9, 0, 0) }),
+			settings: s,
+		});
+		expect(out).toBe('2024-01-15');
+	});
+
+	it('replaces {{time}} with formatted start time', () => {
+		const s = { ...DEFAULT_SETTINGS, timeFormat: 'HH:mm' } as PluginSettings;
+		const out = fillTemplateNormalized('{{time}}', {
+			event: makeNormalized({ startDate: new Date(2024, 0, 15, 9, 5, 0) }),
+			settings: s,
+		});
+		expect(out).toBe('09:05');
+	});
+
+	it('replaces {{end_time}} with formatted end time', () => {
+		const s = { ...DEFAULT_SETTINGS, timeFormat: 'HH:mm' } as PluginSettings;
+		const out = fillTemplateNormalized('{{end_time}}', {
+			event: makeNormalized({
+				startDate: new Date(2024, 0, 15, 9, 0, 0),
+				endDate:   new Date(2024, 0, 15, 9, 30, 0),
+			}),
+			settings: s,
+		});
+		expect(out).toBe('09:30');
+	});
+
+	it('replaces {{time}} with "All day" for all-day events', () => {
+		const out = fillTemplateNormalized('{{time}}', {
+			event: makeNormalized({ isAllDay: true }),
+			settings,
+		});
+		expect(out).toBe('All day');
+	});
 });
 
 // ─── updateAutogenBlocksNamed ─────────────────────────────────────────────────

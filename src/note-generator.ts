@@ -446,6 +446,10 @@ export function fillTemplateNormalized(
 	const timeFormat = settings.timeFormat ?? 'HH:mm';
 	const dateFormat = settings.dateFormat ?? 'YYYY-MM-DD';
 
+	const dateStr    = formatDate(event.startDate, dateFormat);
+	const timeStr    = event.isAllDay ? 'All day' : formatDate(event.startDate, timeFormat);
+	const endTimeStr = event.isAllDay ? '' : formatDate(event.endDate, timeFormat);
+
 	const startHuman = event.isAllDay
 		? 'All day'
 		: `${formatDate(event.startDate, dateFormat)} ${formatDate(event.startDate, timeFormat)}${tz ? ` (${tz})` : ''}`;
@@ -475,6 +479,9 @@ export function fillTemplateNormalized(
 	return template
 		.replace(/\{\{frontmatter\}\}/g,      frontmatter)
 		.replace(/\{\{title\}\}/g,            event.title)
+		.replace(/\{\{date\}\}/g,             dateStr)
+		.replace(/\{\{time\}\}/g,             timeStr)
+		.replace(/\{\{end_time\}\}/g,         endTimeStr)
 		.replace(/\{\{start_iso\}\}/g,        event.start)
 		.replace(/\{\{end_iso\}\}/g,          event.end)
 		.replace(/\{\{start_human\}\}/g,      startHuman)
