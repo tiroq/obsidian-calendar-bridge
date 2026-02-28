@@ -387,9 +387,11 @@ private async computeSyncPlan(): Promise<SyncPlan> {
 
 		const items: SyncPlanItem[] = [];
 
-		for (const event of (result.normalizedEvents ?? [])) {
-			const { getNotePath } = await import('./note-generator');
-			const path = getNotePath(event, this.settings);
+		const normalizedEvents = result.normalizedEvents ?? [];
+		const { getNotePaths } = await import('./note-generator');
+		const notePathMap = getNotePaths(normalizedEvents, this.settings);
+		for (const event of normalizedEvents) {
+			const path = notePathMap.get(`${event.eventId}::${event.start}`)!;
 			const exists = this.app.vault.getAbstractFileByPath(path) !== null;
 			items.push({
 				action: exists ? 'update' : 'create',
