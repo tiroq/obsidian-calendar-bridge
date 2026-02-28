@@ -11,6 +11,7 @@ import {
 	formatDate,
 	formatDuration,
 	getNotePath,
+	getNotePaths,
 	getSeriesPagePath,
 	sanitizeFilename,
 	slugify,
@@ -116,6 +117,90 @@ describe('getNotePath', () => {
 		const path = getNotePath(e, settings);
 		expect(path).not.toContain('/Review');
 		expect(path).not.toContain(':');
+	});
+});
+
+// ─── getNotePaths ────────────────────────────────────────────────────────────────────
+
+describe('getNotePaths', () => {
+	const settings = { meetingsRoot: 'Meetings', dateFolderFormat: 'YYYY-MM-DD' };
+	const START_ISO = '2026-03-01T13:00:00.000Z';
+
+	/** Helper: build a minimal event compatible with getNotePaths. */
+	function makeEvent(id: string, title: string, hour = 13): { title: string; startDate: Date; eventId: string; start: string } {
+		const startDate = new Date(2026, 2, 1, hour, 0, 0); // 2026-03-01
+		return { title, startDate, eventId: id, start: startDate.toISOString() };
+	}
+
+	/** Composite instance key used as map key in getNotePaths. */
+	function key(id: string, start: string): string {
+		return `${id}::${start}`;
+	}
+
+	it('no conflicts — returns base paths unchanged', () => {
+		const a = makeEvent('id-aaa', 'Invoice Review');
+		const b = makeEvent('id-bbb', 'Budget Meeting');
+		const map = getNotePaths([a, b], settings);
+		expect(map.get(key('id-aaa', a.start))).toBe('Meetings/2026-03-01/1300 Invoice Review.md');
+		expect(map.get(key('id-bbb', b.start))).toBe('Meetings/2026-03-01/1300 Budget Meeting.md');
+	});
+
+	it('single event — no suffix', () => {
+		const e = makeEvent('id-zzz', 'Standup');
+		const map = getNotePaths([e], settings);
+		expect(map.get(key('id-zzz', e.start))).toBe('Meetings/2026-03-01/1300 Standup.md');
+	});
+
+	it('conflict — both events get shortId suffix', () => {
+		// Use IDs whose last-8-alphanumeric are predictable and distinct
+		// 'eventAAA00000001' stripped → 'eventAAA00000001', last 8 = '00000001'
+		// 'eventBBB00000002' stripped → 'eventBBB00000002', last 8 = '00000002'
+		const a = makeEvent('eventAAA00000001', 'Invoice');
+		const b = makeEvent('eventBBB00000002', 'Invoice');
+		const map = getNotePaths([a, b], settings);
+		const pathA = map.get(key('eventAAA00000001', a.start))!;
+		const pathB = map.get(key('eventBBB00000002', b.start))!;
+		// Both should contain the suffix pattern
+		expect(pathA).toMatch(/1300 Invoice \([a-zA-Z0-9]+\)\.md$/);
+		expect(pathB).toMatch(/1300 Invoice \([a-zA-Z0-9]+\)\.md$/);
+		// Paths must be different from each other
+		expect(pathA).not.toBe(pathB);
+		// Short IDs match the last 8 alphanumeric chars of the eventId
+		expect(pathA).toContain('00000001');
+		expect(pathB).toContain('00000002');
+	});
+
+	it('conflict — non-conflicting event on same day is left clean', () => {
+		const a = makeEvent('gcal:aaaaaa1111', 'Invoice');
+		const b = makeEvent('gcal:bbbbbb2222', 'Invoice');
+		const c = makeEvent('gcal:cccccc3333', 'Budget');
+		const map = getNotePaths([a, b, c], settings);
+		expect(map.get(key('gcal:cccccc3333', c.start))).toBe('Meetings/2026-03-01/1300 Budget.md');
+		expect(map.get(key('gcal:aaaaaa1111', a.start))).toMatch(/1300 Invoice \([a-zA-Z0-9]+\)\.md$/);
+	});
+
+	it('ics recurring events — same eventId, different dates, no conflict', () => {
+		// ICS recurring events share the same UID but have different startDates
+		const e1 = { title: 'Standup', startDate: new Date(2026, 2, 1, 9, 0, 0), eventId: 'standup-001@test', start: new Date(2026, 2, 1, 9, 0, 0).toISOString() };
+		const e2 = { title: 'Standup', startDate: new Date(2026, 2, 2, 9, 0, 0), eventId: 'standup-001@test', start: new Date(2026, 2, 2, 9, 0, 0).toISOString() };
+		const e3 = { title: 'Standup', startDate: new Date(2026, 2, 3, 9, 0, 0), eventId: 'standup-001@test', start: new Date(2026, 2, 3, 9, 0, 0).toISOString() };
+		const map = getNotePaths([e1, e2, e3], settings);
+		// Each occurrence is in a different date folder — no conflict, no suffix
+		expect(map.get(key('standup-001@test', e1.start))).toBe('Meetings/2026-03-01/0900 Standup.md');
+		expect(map.get(key('standup-001@test', e2.start))).toBe('Meetings/2026-03-02/0900 Standup.md');
+		expect(map.get(key('standup-001@test', e3.start))).toBe('Meetings/2026-03-03/0900 Standup.md');
+	});
+
+	it('legacy path conflict — both events get shortId suffix', () => {
+		const legacySettings = { notesFolder: 'Notes', dateFormat: 'YYYY-MM-DD' };
+		const a = makeEvent('id-111', 'Standup');
+		const b = makeEvent('id-222', 'Standup');
+		const map = getNotePaths([a, b], legacySettings);
+		const pathA = map.get(key('id-111', a.start))!;
+		const pathB = map.get(key('id-222', b.start))!;
+		expect(pathA).toMatch(/2026-03-01 Standup \([a-zA-Z0-9]+\)\.md$/);
+		expect(pathB).toMatch(/2026-03-01 Standup \([a-zA-Z0-9]+\)\.md$/);
+		expect(pathA).not.toBe(pathB);
 	});
 });
 
