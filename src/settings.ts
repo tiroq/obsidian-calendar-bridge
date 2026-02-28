@@ -1111,6 +1111,18 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 			},
 		});
+
+		new Setting(containerEl)
+			.setName('Contacts folder')
+			.setDesc('Folder (including sub-folders) containing Person notes with an `email:` frontmatter field. Matched attendees appear as [[PersonNote]] wikilinks in meeting notes. Leave blank to disable.')
+			.addText(t => {
+				t.setPlaceholder('People').setValue(this.plugin.settings.contactsFolder);
+				new FolderSuggest(this.app, t.inputEl);
+				t.onChange(async v => {
+					this.plugin.settings.contactsFolder = v.trim();
+					await this.plugin.saveSettings();
+				});
+			});
 	}
 
 	// ─── Format ────────────────────────────────────────────────────────────────
