@@ -361,22 +361,22 @@ export async function runSync(
 	// ── Create / update meeting notes ───────────────────────────────────────
 	onProgress?.('writing-notes', 75);
 	for (const event of filteredEvents) {
-		const notePath      = getNotePath(event, pathSettings);
-		const seriesPagePath = event.isRecurring
-			? (() => {
-				const sp = getSeriesPath(event.title, { ...settings, seriesFolder });
-				return sp.split('/').pop()?.replace(/\.md$/, '') ?? event.title;
-			})()
-			: undefined;
-
-		// Build note content using the new normalized renderer
-		const newContent = fillTemplateNormalized(template, {
-			event,
-			settings: { ...settings, meetingsRoot: notesFolder, seriesRoot: seriesFolder } as PluginSettings,
-			seriesPagePath,
-		});
-
 		try {
+			const notePath = getNotePath(event, pathSettings);
+			const seriesPagePath = event.isRecurring
+				? (() => {
+					const sp = getSeriesPath(event.title, { ...settings, seriesFolder });
+					return sp.split('/').pop()?.replace(/\.md$/, '') ?? event.title;
+				})()
+				: undefined;
+
+			// Build note content using the new normalized renderer
+			const newContent = fillTemplateNormalized(template, {
+				event,
+				settings: { ...settings, meetingsRoot: notesFolder, seriesRoot: seriesFolder } as PluginSettings,
+				seriesPagePath,
+			});
+
 			const existing = app.vault.getAbstractFileByPath(notePath);
 			if (existing instanceof TFile) {
 				const existingContent = await app.vault.read(existing);
@@ -405,13 +405,16 @@ export async function runSync(
 					result.skipped++;
 				}
 			} else {
+				// Ensure the parent folder exists (handles date subfolders like Meetings/2026-02-28/)
+				const parentFolder = notePath.includes('/') ? notePath.split('/').slice(0, -1).join('/') : '';
+				if (parentFolder) await ensureFolderExists(app, parentFolder);
 				await app.vault.create(notePath, newContent);
 				result.created++;
 			}
 		} catch (err) {
-			result.errors.push(
-				`Failed to sync "${event.title}" (${event.startDate.toISOString()}): ${(err as Error).message}`,
-			);
+			const msg = `Failed to sync "${event.title}" (${event.startDate.toISOString()}): ${(err as Error).message}`;
+			console.error('[CalendarBridge] WRITE_NOTE_ERROR —', msg, err);
+			result.errors.push(msg);
 		}
 	}
 
@@ -439,16 +442,16 @@ export async function runSync(
 				result.created++;
 			}
 		} catch (err) {
-			result.errors.push(
-				`Failed to sync series "${series.title}": ${(err as Error).message}`,
-			);
+			const msg = `Failed to sync series "${series.title}": ${(err as Error).message}`;
+			console.error('[CalendarBridge] WRITE_SERIES_ERROR —', msg, err);
+			result.errors.push(msg);
 		}
 	}
 
 
 	console.log(`[CalendarBridge] RENDER_TEMPLATES_DONE — template applied to ${filteredEvents.length} event(s)`);
 	onProgress?.('completed', 100);
-	console.log(`[CalendarBridge] WRITE_FILES_DONE — created:${result.created} updated:${result.updated} skipped:${result.skipped} errors:${result.errors.length}`);
+	console.log(`[CalendarBridge] WRITE_FILES_DONE — created:${result.created} updated:${result.updated} skipped:${result.skipped} errors:${result.errors.length}${result.errors.length > 0 ? ' | ' + result.errors.join(' | ') : ''}`);
 	result.normalizedEvents = allEvents;
 	return result;
 }
