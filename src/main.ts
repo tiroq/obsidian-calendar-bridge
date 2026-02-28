@@ -240,6 +240,27 @@ export default class CalendarBridgePlugin
 	 * Run a full idempotent sync and show a Notice with the result.
 	 * Also populates seriesCandidates for use by the Series Modal.
 	 */
+	/**
+	 * Build the per-series enablement callback used by all runSync() calls.
+	 * Non-recurring events always pass through; unknown recurring series become
+	 * new candidates; known recurring series respect their enabled flag.
+	 */
+	private buildIsSeriesEnabled(): (key: string, isRecurring?: boolean) => boolean | undefined {
+		return (key: string, isRecurring?: boolean): boolean | undefined => {
+			if (!isRecurring) {
+				console.log(`[CalendarBridge] SERIES_GATE — key=${key} recurring=false → true (bypass)`);
+				return true;
+			}
+			const profile = this.stateManager.getProfile(key);
+			if (!profile) {
+				console.log(`[CalendarBridge] SERIES_GATE — key=${key} recurring=true profile=NOT_FOUND → undefined (new candidate)`);
+				return undefined;
+			}
+			console.log(`[CalendarBridge] SERIES_GATE — key=${key} recurring=true profile.enabled=${profile.enabled} → ${profile.enabled}`);
+			return profile.enabled;
+		};
+	}
+
 	async triggerSync(): Promise<void> {
 		const enabledSources = this.settings.sources.filter(s => s.enabled);
 		if (enabledSources.length === 0) {
@@ -258,20 +279,7 @@ export default class CalendarBridgePlugin
 		console.log(`[CalendarBridge] TRIGGER_SYNC — sources=${enabledSources.length} gcal=${!!gcalSource} selectedCalendarIds=${selectedCalendarIds ? JSON.stringify(selectedCalendarIds) : 'none'}`);
 		// Pass stateManager.isEnabled so sync respects per-series opt-in.
 		// Returns undefined for unknown keys so they land in newCandidates.
-		const isSeriesEnabled = (key: string, isRecurring?: boolean): boolean | undefined => {
-			// Single (non-recurring) events are always synced — they have no series to subscribe to.
-			if (!isRecurring) {
-				console.log(`[CalendarBridge] SERIES_GATE — key=${key} recurring=false → true (bypass)`);
-				return true;
-			}
-			const profile = this.stateManager.getProfile(key);
-			if (!profile) {
-				console.log(`[CalendarBridge] SERIES_GATE — key=${key} recurring=true profile=NOT_FOUND → undefined (new candidate)`);
-				return undefined; // unknown recurring series — new candidate
-			}
-			console.log(`[CalendarBridge] SERIES_GATE — key=${key} recurring=true profile.enabled=${profile.enabled} → ${profile.enabled}`);
-			return profile.enabled;
-		};
+		const isSeriesEnabled = this.buildIsSeriesEnabled();
 		result = await runSync(
 			this.app,
 			this.settings,
@@ -355,7 +363,7 @@ private async computeSyncPlan(): Promise<SyncPlan> {
 		// Pass selectedCalendarIds so gcal events are fetched and included in the plan.
 		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
 		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
-		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, undefined, selectedCalendarIds);
+		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, this.buildIsSeriesEnabled(), selectedCalendarIds);
 
 		const items: SyncPlanItem[] = [];
 
@@ -380,7 +388,7 @@ private async computeSyncPlan(): Promise<SyncPlan> {
 		// Apply by running the real sync (idempotent — will only write what changed)
 		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
 		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
-		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, undefined, selectedCalendarIds);
+		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, this.buildIsSeriesEnabled(), selectedCalendarIds);
 		this.settings.lastSyncTime = new Date().toLocaleString();
 		await this.saveSettings();
 		this.updateStatusBar(`Synced ${new Date().toLocaleTimeString()}`);
