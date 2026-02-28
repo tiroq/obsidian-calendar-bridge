@@ -13,6 +13,8 @@
  */
 
 import { App, TFile, requestUrl } from 'obsidian';
+import { injectBlocks } from './services/TemplateService';
+import { resolveTemplatePath } from './services/TemplateRoutingService';
 import { NormalizedEvent, PluginSettings, SyncStage } from './types';
 import { parseAndFilterEvents } from './ics-parser';
 import { GoogleCalendarAdapter } from './sources/gcal-source';
@@ -137,6 +139,8 @@ export async function runSync(
 	isSeriesEnabled?: (seriesKey: string, isRecurring: boolean) => boolean | undefined,
 	/** When provided, only events from these calendar IDs are synced. */
 	selectedCalendarIds?: string[],
+	/** When provided, looks up the series profile for a given seriesKey (for template routing). */
+	getSeriesProfile?: (seriesKey: string) => import('./types').SeriesProfile | undefined,
 ): Promise<SyncResult> {
 	const result: SyncResult = {
 		created: 0, updated: 0, skipped: 0, errors: [],
@@ -322,25 +326,30 @@ export async function runSync(
 	// ── Ensure base notes folder exists ────────────────────────────────────
 	await ensureFolderExists(app, notesFolder);
 
-	// ── Load custom template if configured ─────────────────────────────────
-	let template = DEFAULT_TEMPLATE;
-	if (settings.templatePath) {
-		const tplFile = app.vault.getAbstractFileByPath(settings.templatePath);
+	// ── Template cache + resolver ──────────────────────────────────────────
+	// Templates are loaded lazily and cached by path to avoid redundant vault reads.
+	const templateCache = new Map<string, string>(); // '' key = built-in DEFAULT_TEMPLATE
+	const loadTemplate = async (path: string): Promise<string> => {
+		if (!path) return DEFAULT_TEMPLATE;
+		if (templateCache.has(path)) return templateCache.get(path)!;
+		const tplFile = app.vault.getAbstractFileByPath(path);
 		if (tplFile instanceof TFile) {
 			try {
-				template = await app.vault.read(tplFile);
+				const content = await app.vault.read(tplFile);
+				templateCache.set(path, content);
+				return content;
 			} catch (err) {
-				const msg = `Template read failed (${settings.templatePath}): ${(err as Error).message}. Using built-in template.`;
+				const msg = `Template read failed (${path}): ${(err as Error).message}. Using built-in template.`;
 				console.warn('[CalendarBridge] TEMPLATE_WARN —', msg);
 				result.errors.push(msg);
 			}
 		} else {
-			const msg = `Template file not found: "${settings.templatePath}". Using built-in template.`;
+			const msg = `Template file not found: "${path}". Using built-in template.`;
 			console.warn('[CalendarBridge] TEMPLATE_WARN —', msg);
 			result.errors.push(msg);
 		}
-	}
-console.log(`[CalendarBridge] TEMPLATE — using ${settings.templatePath ? `custom: ${settings.templatePath}` : 'built-in default'}`);
+		return DEFAULT_TEMPLATE;
+	};
 
 	// ── Build contact map ───────────────────────────────────────────────────
 	const contactMap = settings.contactsFolder
@@ -407,9 +416,21 @@ console.log(`[CalendarBridge] TEMPLATE — using ${settings.templatePath ? `cust
 					return sp.split('/').pop()?.replace(/\.md$/, '') ?? event.title;
 				})()
 				: undefined;
+			// Resolve per-event template via TemplateRoutingService
+			const profile = (event.seriesKey && getSeriesProfile)
+				? getSeriesProfile(event.seriesKey)
+				: undefined;
+			const routeResult = resolveTemplatePath({
+				event,
+				profile,
+				routes: settings.templateRoutes ?? [],
+				defaultTemplatePath: settings.templatePath,
+			});
+			console.log(`[CalendarBridge] TEMPLATE_ROUTE — "${event.title}" path="${routeResult.templatePath || '(built-in)'}" reason=${routeResult.reason}${routeResult.matchedRouteId ? ` matchedRoute=${routeResult.matchedRouteId}` : ''}`);
+			const eventTemplate = await loadTemplate(routeResult.templatePath);
 
 			// Build note content using the new normalized renderer
-			const newContent = fillTemplateNormalized(template, {
+			const newContent = fillTemplateNormalized(eventTemplate, {
 				event,
 				settings: { ...settings, meetingsRoot: notesFolder, seriesRoot: seriesFolder } as PluginSettings,
 				seriesPagePath,
@@ -444,6 +465,8 @@ console.log(`[CalendarBridge] TEMPLATE — using ${settings.templatePath ? `cust
 				} else {
 					updated = updateAutogenBlocks(existingContent, newContent);
 				}
+				// Apply CB slot injection (idempotent — updates existing CB blocks, no-op if none present)
+				updated = injectBlocks(updated, {});
 
 				if (updated !== existingContent) {
 					console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → UPDATE ${notePath} (AUTOGEN changed)`);
@@ -461,7 +484,9 @@ console.log(`[CalendarBridge] TEMPLATE — using ${settings.templatePath ? `cust
 					await ensureFolderExists(app, parentFolder);
 				}
 				console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → CREATE ${notePath}`);
-				await app.vault.create(notePath, newContent);
+				// Apply CB slot injection to new note (handles {{CB_SLOT}} tokens if present)
+				const contentWithCb = injectBlocks(newContent, {});
+				await app.vault.create(notePath, contentWithCb);
 				result.created++;
 			}
 		} catch (err) {
