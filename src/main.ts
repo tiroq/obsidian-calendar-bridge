@@ -331,8 +331,10 @@ export default class CalendarBridgePlugin
 	 */
 private async computeSyncPlan(): Promise<SyncPlan> {
 		// Run a real sync (which is idempotent) and capture the result as plan items.
-		// The result tells us what was created, updated, or skipped.
-		const result = await runSync(this.app, this.settings);
+		// Pass selectedCalendarIds so gcal events are fetched and included in the plan.
+		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
+		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
+		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, undefined, selectedCalendarIds);
 
 		const items: SyncPlanItem[] = [];
 
@@ -355,7 +357,9 @@ private async computeSyncPlan(): Promise<SyncPlan> {
 	 */
 	async applyPlan(_plan: SyncPlan): Promise<{ created: number; updated: number; errors: string[] }> {
 		// Apply by running the real sync (idempotent — will only write what changed)
-		const result = await runSync(this.app, this.settings);
+		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
+		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
+		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, undefined, selectedCalendarIds);
 		this.settings.lastSyncTime = new Date().toLocaleString();
 		await this.saveSettings();
 		this.updateStatusBar(`Synced ${new Date().toLocaleTimeString()}`);

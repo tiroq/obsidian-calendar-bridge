@@ -15,6 +15,7 @@
 import { App, TFile, requestUrl } from 'obsidian';
 import { NormalizedEvent, PluginSettings, SyncStage } from './types';
 import { parseAndFilterEvents } from './ics-parser';
+import { GoogleCalendarAdapter } from './sources/gcal-source';
 import {
 	DEFAULT_TEMPLATE,
 	AUTOGEN_AGENDA_START,
@@ -191,16 +192,49 @@ export async function runSync(
 		}
 	}
 
-	// ── Filter by selected calendar IDs ────────────────────────────────────
-	const calendarFilter = selectedCalendarIds && selectedCalendarIds.length > 0
+	// ── Fetch Google Calendar events ──────────────────────────────────────
+	for (const source of allSources) {
+		if (!source.enabled) continue;
+		if (source.sourceType !== 'gcal_api') continue;
+		const gcalSettings = (source as { google?: import('./types').GoogleApiSettings }).google;
+		if (!gcalSettings) continue;
+
+		const adapter = new GoogleCalendarAdapter({
+			id: source.id,
+			name: source.name,
+			settings: gcalSettings,
+			onSettingsUpdate: async (updated) => { Object.assign(gcalSettings, updated); },
+		});
+
+		// Use selectedCalendarIds from the source itself, or the param, falling back to ['primary']
+		const calIds =
+			(selectedCalendarIds && selectedCalendarIds.length > 0)
+				? selectedCalendarIds
+				: (gcalSettings.selectedCalendarIds ?? []);
+		const targets = calIds.length > 0 ? calIds : ['primary'];
+
+		for (const calId of targets) {
+			try {
+				const events = await adapter.listEvents(calId, from, to);
+				allEvents.push(...events);
+			} catch (err) {
+				result.errors.push(
+					`Failed to fetch gcal "${source.name}" (${calId}): ${(err as Error).message}`,
+				);
+			}
+		}
+	}
+
+	// ── Filter by selected calendar IDs (gcal only) ─────────────────────────
+	const gcalCalendarFilter = selectedCalendarIds && selectedCalendarIds.length > 0
 		? new Set(selectedCalendarIds)
 		: null;
 
 	// ── Filter by series subscription ───────────────────────────────────────
 	const filteredEvents: NormalizedEvent[] = [];
 	for (const event of allEvents) {
-		// Skip if calendar not selected
-		if (calendarFilter && !calendarFilter.has(event.calendarId)) {
+		// Skip gcal events whose calendar was not selected
+		if (gcalCalendarFilter && event.source === 'gcal_api' && !gcalCalendarFilter.has(event.calendarId)) {
 			result.skipped++;
 			continue;
 		}

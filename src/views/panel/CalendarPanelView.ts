@@ -115,12 +115,16 @@ export class CalendarPanelView extends ItemView {
 		// ── SyncStore ──────────────────────────────────────────────────────────
 		this.syncStore = new SyncStore(
 			async (onProgress: (stage: SyncStage, pct: number) => void) => {
+				const gcalSrc = this.plugin.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
+				const selectedCalendarIds = gcalSrc?.google?.selectedCalendarIds;
 				await runSync(
 					this.app,
 					this.plugin.settings,
 					undefined,
 					undefined,
 					onProgress,
+					undefined,
+					selectedCalendarIds,
 				);
 			},
 			this.plugin.settings.lastSyncTime,
@@ -214,7 +218,17 @@ export class CalendarPanelView extends ItemView {
 		this.previewSection = new PreviewSection(scroll, {
 			filterStore: this.filterStore,
 			fetchEvents: async () => {
-				const result = await runSync(this.app, this.plugin.settings);
+				const gcalSrc = this.plugin.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
+				const selectedCalendarIds = gcalSrc?.google?.selectedCalendarIds;
+				const result = await runSync(
+					this.app,
+					this.plugin.settings,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					selectedCalendarIds,
+				);
 				return result.normalizedEvents ?? [];
 			},
 		});

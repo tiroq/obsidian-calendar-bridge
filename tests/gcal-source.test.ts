@@ -297,3 +297,221 @@ describe('PKCE state machine', () => {
 		).rejects.toThrow(/No pending PKCE verifier/);
 	});
 });
+
+// ─── listCalendars ────────────────────────────────────────────────────────────
+
+describe('listCalendars', () => {
+	const CAL_LIST_RESPONSE = {
+		items: [
+			{ id: 'primary', summary: 'My Calendar', accessRole: 'owner', primary: true },
+			{ id: 'work@example.com', summary: 'Work', accessRole: 'writer', backgroundColor: '#4a86e8' },
+			{ id: 'holidays@group.v.calendar.google.com', summary: 'Holidays', accessRole: 'reader' },
+		],
+	};
+
+	beforeEach(() => {
+		jest.clearAllMocks();
+	});
+
+	test('returns all calendars from the API', async () => {
+		(requestUrl as jest.Mock).mockResolvedValue({ status: 200, text: JSON.stringify(CAL_LIST_RESPONSE), json: CAL_LIST_RESPONSE });
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const cals = await adapter.listCalendars();
+		expect(cals).toHaveLength(3);
+		expect(cals[0].id).toBe('primary');
+		expect(cals[1].name).toBe('Work');
+		expect(cals[2].accessRole).toBe('reader');
+	});
+
+	test('maps backgroundColor and primary fields', async () => {
+		(requestUrl as jest.Mock).mockResolvedValue({ status: 200, text: JSON.stringify(CAL_LIST_RESPONSE), json: CAL_LIST_RESPONSE });
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const cals = await adapter.listCalendars();
+		expect(cals[0].primary).toBe(true);
+		expect(cals[1].backgroundColor).toBe('#4a86e8');
+	});
+
+	test('handles pagination via nextPageToken', async () => {
+		const page1 = { items: [{ id: 'cal1', summary: 'Cal 1', accessRole: 'owner' }], nextPageToken: 'tok2' };
+		const page2 = { items: [{ id: 'cal2', summary: 'Cal 2', accessRole: 'reader' }] };
+		(requestUrl as jest.Mock)
+			.mockResolvedValueOnce({ status: 200, text: JSON.stringify(page1), json: page1 })
+			.mockResolvedValueOnce({ status: 200, text: JSON.stringify(page2), json: page2 });
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const cals = await adapter.listCalendars();
+		expect(cals).toHaveLength(2);
+		expect(cals[0].id).toBe('cal1');
+		expect(cals[1].id).toBe('cal2');
+		// second call should include pageToken param
+		const secondCallUrl: string = (requestUrl as jest.Mock).mock.calls[1][0].url;
+		expect(secondCallUrl).toContain('pageToken=tok2');
+	});
+
+	test('returns empty array when items is undefined', async () => {
+		const empty = {};
+		(requestUrl as jest.Mock).mockResolvedValue({ status: 200, text: JSON.stringify(empty), json: empty });
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const cals = await adapter.listCalendars();
+		expect(cals).toHaveLength(0);
+	});
+});
+
+// ─── listEvents ───────────────────────────────────────────────────────────────
+
+function makeGCalEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+	return {
+		id: 'evt1',
+		status: 'confirmed',
+		summary: 'Team Meeting',
+		start: { dateTime: '2024-03-15T10:00:00Z' },
+		end: { dateTime: '2024-03-15T11:00:00Z' },
+		iCalUID: 'evt1@google.com',
+		...overrides,
+	};
+}
+
+function mockEvents(items: unknown[], nextPageToken?: string) {
+	const data = nextPageToken ? { items, nextPageToken } : { items };
+	(requestUrl as jest.Mock).mockResolvedValue({ status: 200, text: JSON.stringify(data), json: data });
+}
+
+describe('listEvents', () => {
+	const TIME_MIN = new Date('2024-03-15T00:00:00Z');
+	const TIME_MAX = new Date('2024-03-18T00:00:00Z');
+
+	beforeEach(() => {
+		jest.clearAllMocks();
+	});
+
+	test('returns timed events within window', async () => {
+		mockEvents([makeGCalEvent()]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events).toHaveLength(1);
+		expect(events[0].title).toBe('Team Meeting');
+		expect(events[0].source).toBe('gcal_api');
+	});
+
+	test('sends singleEvents=true and orderBy=startTime in URL', async () => {
+		mockEvents([]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		const url: string = (requestUrl as jest.Mock).mock.calls[0][0].url;
+		expect(url).toContain('singleEvents=true');
+		expect(url).toContain('orderBy=startTime');
+	});
+
+	test('sends timeMin and timeMax as ISO strings', async () => {
+		mockEvents([]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		const url: string = (requestUrl as jest.Mock).mock.calls[0][0].url;
+		expect(url).toContain(encodeURIComponent(TIME_MIN.toISOString()));
+		expect(url).toContain(encodeURIComponent(TIME_MAX.toISOString()));
+	});
+
+	test('handles all-day events with isAllDay=true', async () => {
+		mockEvents([makeGCalEvent({ start: { date: '2024-03-15' }, end: { date: '2024-03-16' } })]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events[0].isAllDay).toBe(true);
+	});
+
+	test('handles recurring events — isRecurring=true and recurringEventId set', async () => {
+		mockEvents([makeGCalEvent({ recurringEventId: 'recurring-base-id', iCalUID: 'uid@google.com' })]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events[0].isRecurring).toBe(true);
+		expect(events[0].recurringEventId).toBe('recurring-base-id');
+	});
+
+	test('maps conferenceData video entry point to meetingUrl', async () => {
+		mockEvents([makeGCalEvent({
+			conferenceData: { entryPoints: [{ entryPointType: 'video', uri: 'https://meet.google.com/abc' }] },
+		})]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok', includeConferenceData: true }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events[0].meetingUrl).toBe('https://meet.google.com/abc');
+	});
+
+	test('maps attendees and filters out self', async () => {
+		mockEvents([makeGCalEvent({
+			attendees: [
+				{ email: 'me@example.com', self: true, responseStatus: 'accepted' },
+				{ email: 'alice@example.com', displayName: 'Alice', responseStatus: 'accepted' },
+			],
+		})]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events[0].attendees).toHaveLength(1);
+		expect(events[0].attendees![0].email).toBe('alice@example.com');
+	});
+
+	test('returns empty array for empty response', async () => {
+		mockEvents([]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events).toHaveLength(0);
+	});
+
+	test('handles pagination — aggregates all pages', async () => {
+		const page1 = { items: [makeGCalEvent({ id: 'e1', summary: 'E1' })], nextPageToken: 'p2' };
+		const page2 = { items: [makeGCalEvent({ id: 'e2', summary: 'E2', iCalUID: 'e2@google.com' })] };
+		(requestUrl as jest.Mock)
+			.mockResolvedValueOnce({ status: 200, text: JSON.stringify(page1), json: page1 })
+			.mockResolvedValueOnce({ status: 200, text: JSON.stringify(page2), json: page2 });
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events).toHaveLength(2);
+	});
+
+	test('throws on 403 response', async () => {
+		(requestUrl as jest.Mock).mockResolvedValue({ status: 403, text: 'Forbidden', json: {} });
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		await expect(adapter.listEvents('primary', TIME_MIN, TIME_MAX)).rejects.toThrow('Google API error 403');
+	});
+});
+
+// ─── toNormalized (via listEvents mock) ───────────────────────────────────────
+
+describe('toNormalized (via listEvents)', () => {
+	const FROM = new Date('2024-03-15T00:00:00Z');
+	const TO   = new Date('2024-03-18T00:00:00Z');
+
+	beforeEach(() => jest.clearAllMocks());
+
+	test('cancelled event → status=cancelled', async () => {
+		mockEvents([makeGCalEvent({ status: 'cancelled' })]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const [e] = await adapter.listEvents('primary', FROM, TO);
+		expect(e.status).toBe('cancelled');
+	});
+
+	test('event with no summary → title="(No Title)"', async () => {
+		mockEvents([makeGCalEvent({ summary: undefined })]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const [e] = await adapter.listEvents('primary', FROM, TO);
+		expect(e.title).toBe('(No Title)');
+	});
+
+	test('event with no start → skipped (not in results)', async () => {
+		mockEvents([makeGCalEvent({ start: {} })]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', FROM, TO);
+		expect(events).toHaveLength(0);
+	});
+
+	test('non-recurring event → isRecurring=false', async () => {
+		mockEvents([makeGCalEvent()]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const [e] = await adapter.listEvents('primary', FROM, TO);
+		expect(e.isRecurring).toBe(false);
+	});
+
+	test('calendarId is set to the calendarId param', async () => {
+		mockEvents([makeGCalEvent()]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const [e] = await adapter.listEvents('work@example.com', FROM, TO);
+		expect(e.calendarId).toBe('work@example.com');
+	});
+});

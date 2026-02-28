@@ -437,22 +437,15 @@ describe('runSync — isSeriesEnabled filter', () => {
 // ─── selectedCalendarIds filter ───────────────────────────────────────────────
 
 describe('runSync — selectedCalendarIds filter', () => {
-	it('syncs events matching the selected calendar ID', async () => {
+	it('syncs ICS events regardless of selectedCalendarIds (gcal-only filter)', async () => {
 		const app = new App();
 		const settings = makeSettings();
-		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, undefined, ['src1']);
+		// selectedCalendarIds only filters gcal events; ICS events pass through always
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, undefined, ['some-gcal-id']);
 		expect(result.created).toBe(1);
 	});
 
-	it('skips events from non-selected calendar IDs', async () => {
-		const app = new App();
-		const settings = makeSettings();
-		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, undefined, ['src2']);
-		expect(result.created).toBe(0);
-		expect(result.skipped).toBeGreaterThanOrEqual(1);
-	});
-
-	it('syncs all events when selectedCalendarIds is empty', async () => {
+	it('syncs all ICS events when selectedCalendarIds is empty', async () => {
 		const app = new App();
 		const settings = makeSettings();
 		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, undefined, []);
@@ -519,5 +512,150 @@ describe('runSync — newCandidates result', () => {
 		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
 		expect(result.normalizedEvents).toBeDefined();
 		expect(result.normalizedEvents!.length).toBeGreaterThanOrEqual(1);
+	});
+});
+
+// ─── Google Calendar source integration ────────────────────────────────────────
+
+import { requestUrl } from './__mocks__/obsidian';
+
+function makeGcalApiSettings(overrides: Partial<{ clientId: string; accessToken: string; refreshToken?: string; tokenExpiry: number; selectedCalendarIds: string[]; includeConferenceData: boolean }> = {}) {
+	return {
+		clientId: 'test.apps.googleusercontent.com',
+		accessToken: 'ya29.test',
+		refreshToken: undefined as string | undefined,
+		tokenExpiry: Date.now() + 3600000,
+		selectedCalendarIds: ['primary'],
+		includeConferenceData: false,
+		...overrides,
+	};
+}
+
+function makeGcalSource(overrides: Record<string, unknown> = {}) {
+	return {
+		id: 'gcal-src-1',
+		name: 'My Google Calendar',
+		enabled: true,
+		sourceType: 'gcal_api' as const,
+		google: makeGcalApiSettings(),
+		...overrides,
+	};
+}
+
+function makeGcalRawEvent(overrides: Record<string, unknown> = {}) {
+	return {
+		id: 'gevt1',
+		status: 'confirmed',
+		summary: 'Standup',
+		start: { dateTime: '2024-01-15T09:00:00Z' },
+		end:   { dateTime: '2024-01-15T09:15:00Z' },
+		iCalUID: 'gevt1@google.com',
+		...overrides,
+	};
+}
+
+function mockGcalEventsResponse(items: unknown[]) {
+	const data = { items };
+	(requestUrl as jest.Mock).mockResolvedValue({
+		status: 200,
+		text: JSON.stringify(data),
+		json: data,
+	});
+}
+
+describe('runSync — Google Calendar source', () => {
+	beforeEach(() => { jest.clearAllMocks(); });
+
+	it('fetches events from gcal source and creates a note', async () => {
+		mockGcalEventsResponse([makeGcalRawEvent()]);
+		const app = new App();
+		const settings: SyncSettings = {
+			...DEFAULT_SETTINGS,
+			notesFolder: 'Meetings',
+			seriesFolder: 'Meetings/Series',
+			syncHorizonDays: 14,
+			sources: [makeGcalSource()],
+		};
+		const result = await runSync(app as never, settings as never, async () => '', NOW);
+		expect(result.errors).toHaveLength(0);
+		expect(result.created).toBe(1);
+		const files = (app.vault as Vault).listFiles();
+		expect(files.some(f => f.includes('Standup'))).toBe(true);
+	});
+
+	it('records error when gcal returns 403 but continues', async () => {
+		(requestUrl as jest.Mock).mockResolvedValue({ status: 403, text: 'Forbidden', json: {} });
+		const app = new App();
+		const settings: SyncSettings = {
+			...DEFAULT_SETTINGS,
+			notesFolder: 'Meetings',
+			seriesFolder: 'Meetings/Series',
+			syncHorizonDays: 14,
+			sources: [makeGcalSource()],
+		};
+		const result = await runSync(app as never, settings as never, async () => '', NOW);
+		expect(result.errors.length).toBeGreaterThan(0);
+		expect(result.errors[0]).toMatch(/403/);
+		expect(result.created).toBe(0);
+	});
+
+	it('falls back to primary when selectedCalendarIds is empty', async () => {
+		mockGcalEventsResponse([makeGcalRawEvent()]);
+		const app = new App();
+		const settings: SyncSettings = {
+			...DEFAULT_SETTINGS,
+			notesFolder: 'Meetings',
+			seriesFolder: 'Meetings/Series',
+			syncHorizonDays: 14,
+			sources: [makeGcalSource({ google: makeGcalApiSettings({ selectedCalendarIds: [] }) })],
+		};
+		const result = await runSync(app as never, settings as never, async () => '', NOW);
+		expect(result.created).toBe(1);
+		const url: string = (requestUrl as jest.Mock).mock.calls[0][0].url;
+		expect(url).toContain('primary');
+	});
+
+	it('gcal event is normalized with source=gcal_api', async () => {
+		mockGcalEventsResponse([makeGcalRawEvent()]);
+		const app = new App();
+		const settings: SyncSettings = {
+			...DEFAULT_SETTINGS,
+			notesFolder: 'Meetings',
+			seriesFolder: 'Meetings/Series',
+			syncHorizonDays: 14,
+			sources: [makeGcalSource()],
+		};
+		const result = await runSync(app as never, settings as never, async () => '', NOW);
+		const evt = result.normalizedEvents?.find(e => e.source === 'gcal_api');
+		expect(evt).toBeDefined();
+		expect(evt!.title).toBe('Standup');
+		expect(evt!.calendarId).toBe('primary');
+	});
+
+	it('gcal and ICS sources both contribute events when mixed', async () => {
+		mockGcalEventsResponse([makeGcalRawEvent()]);
+		const app = new App();
+		const settings: SyncSettings = {
+			...DEFAULT_SETTINGS,
+			notesFolder: 'Meetings',
+			seriesFolder: 'Meetings/Series',
+			syncHorizonDays: 14,
+			sources: [
+				makeGcalSource(),
+				{ id: 'ics-1', name: 'ICS Cal', enabled: true, sourceType: 'ics_public' as const,
+				  ics: { url: 'http://example.com/cal.ics', pollIntervalMinutes: 60 } },
+			],
+		};
+		const result = await runSync(
+			app as never,
+			settings as never,
+			async (url: string) => {
+				if (url === 'http://example.com/cal.ics') return ONE_EVENT_ICS;
+				return '';
+			},
+			NOW,
+		);
+		expect(result.normalizedEvents?.some(e => e.source === 'gcal_api')).toBe(true);
+		expect(result.normalizedEvents?.some(e => e.source !== 'gcal_api')).toBe(true);
 	});
 });

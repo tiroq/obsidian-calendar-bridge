@@ -93,6 +93,8 @@ export class PreviewSection {
 	private listContainer!: HTMLElement;
 	private opts: PreviewSectionOptions;
 	private events: NormalizedEvent[] = [];
+	/** Full unsliced event list for diagnostics. */
+	private _allFetched: NormalizedEvent[] = [];
 	private isLoading = false;
 	private unsub: () => void;
 
@@ -106,7 +108,7 @@ export class PreviewSection {
 		this.buildBody();
 
 		// Re-render when filters change
-		this.unsub = opts.filterStore.subscribe(() => this.renderList());
+		this.unsub = opts.filterStore.subscribe(() => { this.renderList(); if (this._allFetched.length > 0) this.renderDiagnostics(this._allFetched, opts.filterStore.getState()); });
 	}
 
 	private buildSummary(): void {
@@ -159,12 +161,14 @@ export class PreviewSection {
 		loadingEl.setText('Loading…');
 
 		try {
-			const all = await this.opts.fetchEvents();
-			// Sort by start ascending, take first 5
-			this.events = all
-				.filter(e => e.startDate >= new Date())
-				.sort((a, b) => a.startDate.getTime() - b.startDate.getTime())
-				.slice(0, 5);
+		const allFetched = await this.opts.fetchEvents();
+		this._allFetched = allFetched;
+		// Sort by start ascending, take first 5 for display
+		this.events = allFetched
+			.filter(e => e.startDate >= new Date())
+			.sort((a, b) => a.startDate.getTime() - b.startDate.getTime())
+			.slice(0, 5);
+
 		} catch (err) {
 			this.listContainer.empty();
 			const errEl = this.listContainer.createDiv();
@@ -176,6 +180,51 @@ export class PreviewSection {
 		}
 
 		this.renderList();
+		this.renderDiagnostics(this._allFetched, this.opts.filterStore.getState());
+	}
+
+	/** Render diagnostics block below the event list. */
+	private renderDiagnostics(all: NormalizedEvent[], filters: ReturnType<FilterStore['getState']>): void {
+		this.listContainer.querySelector('.cb-diagnostics')?.remove();
+		if (all.length === 0 && this._allFetched.length === 0) return;
+
+		const diag = this.listContainer.createDiv();
+		diag.className = 'cb-diagnostics';
+		diag.style.cssText = [
+			'margin-top:8px',
+			'padding:6px 8px',
+			'border-radius:4px',
+			'background:var(--background-secondary)',
+			'font-size:10px',
+			'color:var(--text-muted)',
+			'line-height:1.6',
+		].join(';');
+
+		const included = all.filter(e => applyFilters(e, filters) === null);
+		const exclusions: Record<string, number> = {};
+		for (const e of all) {
+			const r = applyFilters(e, filters);
+			if (r) exclusions[r] = (exclusions[r] ?? 0) + 1;
+		}
+
+		const lines: string[] = [];
+		lines.push(`📋 Fetched: ${all.length} event(s)`);
+		lines.push(`✅ Included: ${included.length}`);
+		for (const [reason, count] of Object.entries(exclusions)) {
+			lines.push(`❌ ${reason}: ${count}`);
+		}
+
+		if (all.length > 0 && included.length === 0) {
+			lines.push('');
+			lines.push('⚠️ All events filtered out. Adjust filters or check calendar selection.');
+		} else if (all.length === 0) {
+			lines.push('');
+			lines.push('⚠️ No events fetched. Check: calendar selected, sync horizon, and OAuth connection.');
+		}
+
+		diag.innerHTML = lines
+			.map(l => l === '' ? '<br>' : `<div>${l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`)
+			.join('');
 	}
 
 	private renderList(): void {
