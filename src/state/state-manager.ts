@@ -66,6 +66,22 @@ export class StateManager {
 		}
 	}
 
+	/** Toggle the hidden flag for a series (creates a disabled profile if absent). */
+	async toggleSeriesHidden(seriesKey: string, seriesName: string): Promise<void> {
+		const existing = this.subscriptions.profiles[seriesKey];
+		if (existing) {
+			existing.hidden = !existing.hidden;
+		} else {
+			this.subscriptions.profiles[seriesKey] = {
+				seriesKey,
+				seriesName,
+				enabled: false,
+				hidden: true,
+			};
+		}
+		await this.persist();
+	}
+
 	/** All enabled series profiles, sorted by name. */
 	enabledProfiles(): SeriesProfile[] {
 		return Object.values(this.subscriptions.profiles)

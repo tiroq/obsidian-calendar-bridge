@@ -371,3 +371,66 @@ describe('StateManager — getSubscriptions / getCache', () => {
 		expect(before).toBe(after);
 	});
 });
+
+// ─── toggleSeriesHidden ──────────────────────────────────────────────────────
+
+describe('StateManager — toggleSeriesHidden', () => {
+	it('sets hidden=true on first call for an existing profile', async () => {
+		const profile = makeProfile({ hidden: false });
+		const { sm, saveFn } = makeSM({
+			subscriptions: { version: 1, profiles: { [profile.seriesKey]: profile } },
+		});
+		await sm.toggleSeriesHidden(profile.seriesKey, profile.seriesName);
+		expect(sm.getProfile(profile.seriesKey)?.hidden).toBe(true);
+		expect(saveFn).toHaveBeenCalledTimes(1);
+	});
+
+	it('sets hidden=false on second call (toggle back)', async () => {
+		const profile = makeProfile({ hidden: true });
+		const { sm } = makeSM({
+			subscriptions: { version: 1, profiles: { [profile.seriesKey]: profile } },
+		});
+		await sm.toggleSeriesHidden(profile.seriesKey, profile.seriesName);
+		expect(sm.getProfile(profile.seriesKey)?.hidden).toBe(false);
+	});
+
+	it('does NOT change the enabled flag when toggling hidden', async () => {
+		const profile = makeProfile({ enabled: true, hidden: false });
+		const { sm } = makeSM({
+			subscriptions: { version: 1, profiles: { [profile.seriesKey]: profile } },
+		});
+		await sm.toggleSeriesHidden(profile.seriesKey, profile.seriesName);
+		expect(sm.isEnabled(profile.seriesKey)).toBe(true);
+		expect(sm.getProfile(profile.seriesKey)?.hidden).toBe(true);
+	});
+
+	it('creates a hidden disabled profile when key does not exist', async () => {
+		const { sm, saveFn } = makeSM();
+		await sm.toggleSeriesHidden('ical:brand-new', 'Brand New');
+		const profile = sm.getProfile('ical:brand-new');
+		expect(profile).toBeDefined();
+		expect(profile?.hidden).toBe(true);
+		expect(profile?.enabled).toBe(false);
+		expect(saveFn).toHaveBeenCalledTimes(1);
+	});
+
+	it('enabledProfiles includes hidden-but-enabled series (sync not affected)', async () => {
+		const { sm } = makeSM();
+		await sm.enableSeries('ical:a', 'Alpha');
+		await sm.toggleSeriesHidden('ical:a', 'Alpha');
+		const enabled = sm.enabledProfiles();
+		expect(enabled).toHaveLength(1);
+		expect(enabled[0].seriesKey).toBe('ical:a');
+		expect(enabled[0].hidden).toBe(true);
+	});
+
+	it('persists hidden state (round-trip through loadPersistedState)', async () => {
+		const { sm, saved } = makeSM();
+		await sm.enableSeries('ical:a', 'Alpha');
+		await sm.toggleSeriesHidden('ical:a', 'Alpha');
+		const persisted = saved()!;
+		const restored = new StateManager(loadPersistedState(persisted), jest.fn());
+		expect(restored.getProfile('ical:a')?.hidden).toBe(true);
+		expect(restored.isEnabled('ical:a')).toBe(true);
+	});
+});
