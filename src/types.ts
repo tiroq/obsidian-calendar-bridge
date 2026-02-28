@@ -81,6 +81,8 @@ export interface SeriesProfile {
 	seriesKey: string;
 	seriesName: string;
 	enabled: boolean;
+	/** When true, the series is hidden from the main UI list (sync not affected). */
+	hidden?: boolean;
 	noteFolderOverride?: string;
 	templateOverride?: string;
 	defaultAgenda?: string;   // markdown text
