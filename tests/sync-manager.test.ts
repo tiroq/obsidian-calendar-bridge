@@ -393,3 +393,131 @@ describe('runSync — edge cases', () => {
 		expect(result.created).toBe(1); // good source still worked
 	});
 });
+
+// ─── isSeriesEnabled filter ──────────────────────────────────────────────────
+
+describe('runSync — isSeriesEnabled filter', () => {
+	it('syncs events whose seriesKey is enabled (returns true)', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (key: string) => key === 'single:one-off-001@test' ? true as boolean | undefined : undefined as boolean | undefined;
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.created).toBe(1);
+		expect(result.newCandidates).toHaveLength(0);
+	});
+
+	it('skips events whose seriesKey is disabled (returns false)', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string): boolean | undefined => false;
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.created).toBe(0);
+		expect(result.skipped).toBeGreaterThanOrEqual(1);
+	});
+
+	it('pushes unknown seriesKey events to newCandidates and skips them', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string): boolean | undefined => undefined;
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.created).toBe(0);
+		expect(result.newCandidates).toHaveLength(1);
+	});
+
+	it('syncs enabled recurring events and skips disabled ones', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (key: string): boolean | undefined => key.includes('standup') ? true : undefined;
+		const result = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.created).toBeGreaterThanOrEqual(1);
+		expect(result.newCandidates).toHaveLength(0);
+	});
+});
+
+// ─── selectedCalendarIds filter ───────────────────────────────────────────────
+
+describe('runSync — selectedCalendarIds filter', () => {
+	it('syncs events matching the selected calendar ID', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, undefined, ['src1']);
+		expect(result.created).toBe(1);
+	});
+
+	it('skips events from non-selected calendar IDs', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, undefined, ['src2']);
+		expect(result.created).toBe(0);
+		expect(result.skipped).toBeGreaterThanOrEqual(1);
+	});
+
+	it('syncs all events when selectedCalendarIds is empty', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, undefined, []);
+		expect(result.created).toBe(1);
+	});
+});
+
+// ─── onProgress callbacks ─────────────────────────────────────────────────────
+
+describe('runSync — onProgress callbacks', () => {
+	it('calls onProgress with authenticating at start', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const stages: Array<{ stage: string; pct: number }> = [];
+		const onProgress = (stage: string, pct: number) => stages.push({ stage, pct });
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, onProgress as never);
+		expect(stages.some(s => s.stage === 'authenticating')).toBe(true);
+		expect(stages.find(s => s.stage === 'authenticating')?.pct).toBe(5);
+	});
+
+	it('calls onProgress with completed at end', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const stages: Array<{ stage: string; pct: number }> = [];
+		const onProgress = (stage: string, pct: number) => stages.push({ stage, pct });
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, onProgress as never);
+		expect(stages.some(s => s.stage === 'completed')).toBe(true);
+		expect(stages.find(s => s.stage === 'completed')?.pct).toBe(100);
+	});
+
+	it('calls onProgress with all expected stages in order', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const stageNames: string[] = [];
+		const onProgress = (stage: string, _pct: number) => stageNames.push(stage);
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, onProgress as never);
+		expect(stageNames[0]).toBe('authenticating');
+		expect(stageNames[stageNames.length - 1]).toBe('completed');
+	});
+});
+
+// ─── newCandidates population ─────────────────────────────────────────────────
+
+describe('runSync — newCandidates result', () => {
+	it('newCandidates is empty when isSeriesEnabled is not provided', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+		expect(result.newCandidates).toHaveLength(0);
+	});
+
+	it('newCandidates contains correct event data for unknown series', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string): boolean | undefined => undefined;
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.newCandidates).toHaveLength(1);
+		expect(result.newCandidates![0].title).toBe('Project Kickoff');
+	});
+
+	it('normalizedEvents is populated with all fetched events', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+		expect(result.normalizedEvents).toBeDefined();
+		expect(result.normalizedEvents!.length).toBeGreaterThanOrEqual(1);
+	});
+});
