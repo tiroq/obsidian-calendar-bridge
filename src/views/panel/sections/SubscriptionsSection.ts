@@ -3,10 +3,14 @@
  * sync opt-in control.
  *
  * Shows all known series and single events from the subscription profiles
- * with a checkbox to enable/disable sync for each.
+ * with a checkbox to enable/disable sync for each, plus an eye icon to
+ * hide/unhide a series from this list (hidden state does NOT affect sync).
  *
  * After a sync, if new unseen series or events are found (newCandidates),
  * a dismissible banner prompts the user to review and opt them in.
+ *
+ * Hidden series are shown in a collapsible "Hidden series (N)" sub-section
+ * at the bottom of the panel. Sync is unaffected by the hidden flag.
  */
 
 import { NormalizedEvent, SeriesProfile, RichCalendarItem } from '../../../types';
@@ -21,6 +25,11 @@ export interface SubscriptionsSectionCallbacks {
 	disableSeries: (seriesKey: string) => Promise<void>;
 	/** Upsert a full profile (used when accepting a new candidate). */
 	upsertProfile: (profile: SeriesProfile) => Promise<void>;
+	/**
+	 * Toggle the hidden flag for a series.
+	 * Hidden = removed from main list; sync behaviour unchanged.
+	 */
+	toggleSeriesHidden: (seriesKey: string, name: string) => Promise<void>;
 }
 
 export interface SubscriptionsSectionOptions {
@@ -37,12 +46,15 @@ interface DisplayItem {
 	occurrenceCount: number;
 	isNew: boolean;     // not yet in profiles — from newCandidates
 	enabled: boolean;
+	hidden: boolean;
 }
 
 export class SubscriptionsSection {
 	private details: HTMLElement;
 	private bodyEl!: HTMLElement;
 	private listContainer!: HTMLElement;
+	private hiddenSection!: HTMLElement;
+	private hiddenListContainer!: HTMLElement;
 	private bannerEl: HTMLElement | null = null;
 
 	private opts: SubscriptionsSectionOptions;
@@ -168,8 +180,28 @@ export class SubscriptionsSection {
 		this.bannerEl = this.bodyEl.createDiv({ cls: 'cb-subs-banner' });
 		this.bannerEl.style.cssText = 'display:none;';
 
-		// List
+		// Main list (visible series)
 		this.listContainer = this.bodyEl.createDiv({ cls: 'cb-subs-list' });
+
+		// Hidden series collapsible sub-section
+		this.hiddenSection = this.bodyEl.createEl('details');
+		this.hiddenSection.style.cssText = 'margin-top:8px;';
+		this.hiddenSection.setAttribute('data-cb-summary', 'hidden-series');
+
+		const hiddenSummary = this.hiddenSection.createEl('summary');
+		hiddenSummary.style.cssText = [
+			'font-size:11px',
+			'color:var(--text-muted)',
+			'cursor:pointer',
+			'user-select:none',
+			'list-style:none',
+			'padding:2px 0',
+		].join(';');
+		hiddenSummary.setAttribute('data-cb-hidden-summary', 'true');
+
+		this.hiddenListContainer = this.hiddenSection.createDiv({ cls: 'cb-subs-hidden-list' });
+		this.hiddenListContainer.style.cssText = 'padding-top:4px;';
+
 		this.renderList();
 	}
 
@@ -235,6 +267,7 @@ export class SubscriptionsSection {
 
 	private renderList(): void {
 		this.listContainer.empty();
+		this.hiddenListContainer.empty();
 
 		const profiles = this.opts.callbacks.getProfiles();
 		const calendars = this.opts.calendarStore.getCalendars();
@@ -253,6 +286,7 @@ export class SubscriptionsSection {
 				occurrenceCount: 0,
 				isNew: false,
 				enabled: profile.enabled,
+				hidden: profile.hidden ?? false,
 			});
 		}
 
@@ -283,40 +317,69 @@ export class SubscriptionsSection {
 					occurrenceCount: count,
 					isNew: true,
 					enabled: false,
+					hidden: false,
 				});
 			}
 		}
 
-		if (itemMap.size === 0) {
+		// Separate visible vs hidden
+		const visibleItems: DisplayItem[] = [];
+		const hiddenItems: DisplayItem[] = [];
+		for (const item of itemMap.values()) {
+			if (item.hidden) {
+				hiddenItems.push(item);
+			} else {
+				visibleItems.push(item);
+			}
+		}
+
+		if (visibleItems.length === 0 && hiddenItems.length === 0) {
 			const empty = this.listContainer.createDiv();
 			empty.style.cssText = 'font-size:11px;color:var(--text-faint);padding:4px 0;';
 			empty.setText('No series or events yet. Run a sync to discover them.');
-			return;
 		}
 
-		// Sort: new items first, then by name
-		const items = [...itemMap.values()].sort((a, b) => {
+		// Sort: new items first, then recurring before single, then by name
+		const sortItems = (a: DisplayItem, b: DisplayItem) => {
 			if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
 			if (a.isRecurring !== b.isRecurring) return a.isRecurring ? -1 : 1;
 			return a.name.localeCompare(b.name);
-		});
+		};
 
-		for (const item of items) {
-			this.renderItem(item, calMap);
+		visibleItems.sort(sortItems);
+		hiddenItems.sort(sortItems);
+
+		for (const item of visibleItems) {
+			this.renderItem(item, calMap, this.listContainer);
+		}
+
+		// Update hidden sub-section
+		const hiddenSummaryEl = this.hiddenSection.querySelector('[data-cb-hidden-summary]') as HTMLElement | null;
+		if (hiddenItems.length === 0) {
+			this.hiddenSection.style.cssText = 'display:none;';
+		} else {
+			this.hiddenSection.style.cssText = 'margin-top:8px;';
+			if (hiddenSummaryEl) {
+				hiddenSummaryEl.setText(`Hidden series (${hiddenItems.length})`);
+			}
+			for (const item of hiddenItems) {
+				this.renderItem(item, calMap, this.hiddenListContainer);
+			}
 		}
 	}
 
-	private renderItem(item: DisplayItem, calMap: Map<string, RichCalendarItem>): void {
+	private renderItem(item: DisplayItem, calMap: Map<string, RichCalendarItem>, container: HTMLElement): void {
 		const cal = calMap.get(item.calendarId);
 		const color = cal?.backgroundColor ?? 'var(--interactive-accent)';
 
-		const row = this.listContainer.createDiv({ cls: 'cb-sub-row' });
+		const row = container.createDiv({ cls: 'cb-sub-row' });
 		row.style.cssText = [
 			'display:flex',
 			'align-items:flex-start',
 			'gap:8px',
 			'padding:5px 0',
 			item.isNew ? 'background:var(--background-modifier-info-hover);border-radius:3px;padding-left:4px;' : '',
+			item.hidden ? 'opacity:0.6;' : '',
 		].join(';');
 
 		// Checkbox
@@ -386,6 +449,30 @@ export class SubscriptionsSection {
 			calEl.setText(cal.name);
 		}
 
+		// Eye icon toggle (visibility — does NOT affect sync)
+		const eyeBtn = row.createEl('button');
+		eyeBtn.style.cssText = [
+			'flex-shrink:0',
+			'background:none',
+			'border:none',
+			'cursor:pointer',
+			'font-size:13px',
+			'padding:0 2px',
+			'color:var(--text-muted)',
+			'line-height:1',
+			'margin-top:1px',
+		].join(';');
+		eyeBtn.setAttribute('aria-label', item.hidden ? 'Unhide series' : 'Hide series from list');
+		eyeBtn.setText(item.hidden ? '👁' : '🙈');
+
+		eyeBtn.addEventListener('click', async () => {
+			await this.opts.callbacks.toggleSeriesHidden(item.seriesKey, item.name);
+			item.hidden = !item.hidden;
+			this.renderBanner();
+			this.renderList();
+			this.updateSummaryCount();
+		});
+
 		// Toggle on checkbox change
 		cb.addEventListener('change', async () => {
 			if (cb.checked) {
@@ -415,8 +502,10 @@ export class SubscriptionsSection {
 			c => !profiles[c.seriesKey],
 		).length;
 		const enabled = Object.values(profiles).filter(p => p.enabled).length;
+		const hidden = Object.values(profiles).filter(p => p.hidden).length;
 		const newCount = this.newCandidates.filter(c => !profiles[c.seriesKey]).length;
 		let text = `${enabled} / ${total} enabled`;
+		if (hidden > 0) text += ` · ${hidden} hidden`;
 		if (newCount > 0) text += ` · ${newCount} new`;
 		el.setText(text);
 	}

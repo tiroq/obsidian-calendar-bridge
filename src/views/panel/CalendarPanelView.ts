@@ -46,6 +46,8 @@ export interface CalendarBridgePanelPlugin {
 	disableSeries(key: string): Promise<void>;
 	/** Upsert a full profile. */
 	upsertProfile(profile: SeriesProfile): Promise<void>;
+	/** Toggle hidden flag for a series (UI only, does not affect sync). */
+	toggleSeriesHidden(key: string, name: string): Promise<void>;
 }
 
 export class CalendarPanelView extends ItemView {
@@ -203,6 +205,7 @@ export class CalendarPanelView extends ItemView {
 					enableSeries: (key, name) => this.plugin.enableSeries(key, name),
 					disableSeries: (key) => this.plugin.disableSeries(key),
 					upsertProfile: (profile) => this.plugin.upsertProfile(profile),
+				toggleSeriesHidden: (key, name) => this.plugin.toggleSeriesHidden(key, name),
 				},
 			});
 			// Subscribe to new candidates from main plugin sync
