@@ -173,6 +173,61 @@ export function getNotePath(
 }
 
 /**
+ * Compute vault paths for a batch of events, detecting filename conflicts.
+ *
+ * Normal case: `{HHmm} {Title}.md` — no ID in the name.
+ * Conflict case: two or more events produce the same base path →
+ *   each conflicting event gets `({shortId})` appended before the `.md`,
+ *   e.g. `1300 Invoice (a1b2c3).md`.
+ *
+ * Short ID = last 8 alphanumeric characters of `event.eventId`.
+ *
+ * Map key: composite `${eventId}::${startISO}` — unique per instance even for
+ * ICS recurring events that share the same UID/eventId.
+ *
+ * @returns Map<instanceKey, vaultPath> where instanceKey = `${eventId}::${startISO}`
+ */
+export function getNotePaths(
+	events: Array<{ title: string; startDate: Date; eventId: string; start: string }>,
+	settings: AnySettings,
+	seriesName?: string,
+): Map<string, string> {
+	// Step 1: compute the base path and instance key for every event
+	const basePaths = new Map<string, string>(); // instanceKey → basePath
+	const instanceKeys: string[] = [];
+	for (const event of events) {
+		const instanceKey = `${event.eventId}::${event.start}`;
+		instanceKeys.push(instanceKey);
+		const basePath = getNotePath(event, settings, seriesName);
+		basePaths.set(instanceKey, basePath);
+	}
+
+	// Step 2: find which base paths collide (appear more than once)
+	const pathCounts = new Map<string, number>();
+	for (const path of basePaths.values()) {
+		pathCounts.set(path, (pathCounts.get(path) ?? 0) + 1);
+	}
+
+	// Step 3: for collisions, rebuild the path with a short ID suffix
+	const result = new Map<string, string>(); // instanceKey → finalPath
+	for (let i = 0; i < events.length; i++) {
+		const event = events[i];
+		const instanceKey = instanceKeys[i];
+		const base = basePaths.get(instanceKey)!;
+		if ((pathCounts.get(base) ?? 1) > 1) {
+			// Strip non-alphanumeric chars and take last 8 characters as the short ID
+			const shortId = event.eventId.replace(/[^a-zA-Z0-9]/g, '').slice(-8);
+			const withSuffix = base.replace(/\.md$/, ` (${shortId}).md`);
+			result.set(instanceKey, withSuffix);
+		} else {
+			result.set(instanceKey, base);
+		}
+	}
+
+	return result;
+}
+
+/**
  * Compute the vault path for a series index page.
  * Pattern: {seriesRoot}/{slug}.md
  */

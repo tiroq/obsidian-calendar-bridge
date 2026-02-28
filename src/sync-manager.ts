@@ -21,6 +21,7 @@ import {
 	AUTOGEN_AGENDA_START,
 	fillTemplateNormalized,
 	getNotePath,
+	getNotePaths,
 	updateAutogenBlocks,
 	updateAutogenBlocksNamed,
 	buildAgendaBlock,
@@ -377,9 +378,12 @@ export async function runSync(
 	onProgress?.('applying-filters', 50);
 	// ── Create / update meeting notes ───────────────────────────────────────
 	onProgress?.('writing-notes', 75);
+	// Pre-compute note paths for all events, detecting filename conflicts.
+	// Conflicting events (same base path) get a short event ID suffix appended.
+	const notePathMap = getNotePaths(filteredEvents, pathSettings);
 	for (const event of filteredEvents) {
 		try {
-			const notePath = getNotePath(event, pathSettings);
+			const notePath = notePathMap.get(`${event.eventId}::${event.start}`)!;
 			console.log(`[CalendarBridge] NOTE_PATH — "${event.title}" start=${event.start} recurring=${event.isRecurring} → ${notePath}`);
 			const seriesPagePath = event.isRecurring
 				? (() => {
