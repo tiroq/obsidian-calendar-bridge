@@ -149,6 +149,10 @@ export default class CalendarBridgePlugin
 		await this.stateManager.upsertProfile(profile);
 	}
 
+	async toggleSeriesHidden(key: string, name: string): Promise<void> {
+		await this.stateManager.toggleSeriesHidden(key, name);
+	}
+
 	/** Compatibility wrapper for SeriesModal — bulk-replace all profiles. */
 	async saveSubscriptions(state: import('./types').SubscriptionsState): Promise<void> {
 		for (const profile of Object.values(state.profiles)) {
