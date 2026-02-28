@@ -329,9 +329,15 @@ export async function runSync(
 		if (tplFile instanceof TFile) {
 			try {
 				template = await app.vault.read(tplFile);
-			} catch {
-				// Fall back to the built-in template.
+			} catch (err) {
+				const msg = `Template read failed (${settings.templatePath}): ${(err as Error).message}. Using built-in template.`;
+				console.warn('[CalendarBridge] TEMPLATE_WARN —', msg);
+				result.errors.push(msg);
 			}
+		} else {
+			const msg = `Template file not found: "${settings.templatePath}". Using built-in template.`;
+			console.warn('[CalendarBridge] TEMPLATE_WARN —', msg);
+			result.errors.push(msg);
 		}
 	}
 console.log(`[CalendarBridge] TEMPLATE — using ${settings.templatePath ? `custom: ${settings.templatePath}` : 'built-in default'}`);

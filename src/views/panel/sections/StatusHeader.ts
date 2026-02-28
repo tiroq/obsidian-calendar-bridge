@@ -129,10 +129,19 @@ export class StatusHeader {
 		const syncBtn = right.createEl('button');
 		syncBtn.style.cssText = btnStyle;
 		syncBtn.setAttribute('aria-label', 'Sync now');
-		syncBtn.setText('🔄');
-		syncBtn.addEventListener('click', () => this.opts.syncStore.triggerSync());
-		syncBtn.addEventListener('mouseenter', () => { syncBtn.style.color = 'var(--text-accent)'; syncBtn.style.background = 'var(--background-modifier-hover)'; });
-		syncBtn.addEventListener('mouseleave', () => { syncBtn.style.color = 'var(--text-muted)'; syncBtn.style.background = 'none'; });
+		syncBtn.setText('\uD83D\uDD04');
+
+		const canSync = isConnected;
+		if (!canSync) {
+			syncBtn.disabled = true;
+			syncBtn.style.opacity = '0.4';
+			syncBtn.style.cursor = 'not-allowed';
+			syncBtn.setAttribute('title', 'Connect Google Calendar first (⚙ Settings)');
+		} else {
+			syncBtn.addEventListener('click', () => this.opts.syncStore.triggerSync());
+			syncBtn.addEventListener('mouseenter', () => { syncBtn.style.color = 'var(--text-accent)'; syncBtn.style.background = 'var(--background-modifier-hover)'; });
+			syncBtn.addEventListener('mouseleave', () => { syncBtn.style.color = 'var(--text-muted)'; syncBtn.style.background = 'none'; });
+		}
 
 		const settingsBtn = right.createEl('button');
 		settingsBtn.style.cssText = btnStyle;
