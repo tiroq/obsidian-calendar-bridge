@@ -15,7 +15,7 @@
 import { App, ItemView, WorkspaceLeaf } from 'obsidian';
 import { NormalizedEvent, RichCalendarItem, SeriesProfile, SyncStage } from '../../types';
 import { GoogleCalendarAdapter } from '../../sources/gcal-source';
-import { runSync } from '../../sync-manager';
+
 import { CalendarStore } from './stores/CalendarStore';
 import { SyncStore } from './stores/SyncStore';
 import { FilterStore } from './stores/FilterStore';
@@ -48,6 +48,10 @@ export interface CalendarBridgePanelPlugin {
 	upsertProfile(profile: SeriesProfile): Promise<void>;
 	/** Toggle hidden flag for a series (UI only, does not affect sync). */
 	toggleSeriesHidden(key: string, name: string): Promise<void>;
+	/** Run a full sync with series gating, calling onProgress as it proceeds. */
+	triggerSyncWithProgress(onProgress: (stage: import('../../types').SyncStage, pct: number) => void): Promise<void>;
+	/** Fetch normalized events (with series gating) for preview/filter use. */
+	fetchNormalizedEvents(): Promise<NormalizedEvent[]>;
 }
 
 export class CalendarPanelView extends ItemView {
@@ -116,19 +120,9 @@ export class CalendarPanelView extends ItemView {
 
 		// ── SyncStore ──────────────────────────────────────────────────────────
 		this.syncStore = new SyncStore(
-			async (onProgress: (stage: SyncStage, pct: number) => void) => {
-				const gcalSrc = this.plugin.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
-				const selectedCalendarIds = gcalSrc?.google?.selectedCalendarIds;
-				await runSync(
-					this.app,
-					this.plugin.settings,
-					undefined,
-					undefined,
-					onProgress,
-					undefined,
-					selectedCalendarIds,
-				);
-			},
+		async (onProgress: (stage: SyncStage, pct: number) => void) => {
+			await this.plugin.triggerSyncWithProgress(onProgress);
+		},
 			this.plugin.settings.lastSyncTime,
 		);
 
@@ -221,18 +215,7 @@ export class CalendarPanelView extends ItemView {
 		this.previewSection = new PreviewSection(scroll, {
 			filterStore: this.filterStore,
 			fetchEvents: async () => {
-				const gcalSrc = this.plugin.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
-				const selectedCalendarIds = gcalSrc?.google?.selectedCalendarIds;
-				const result = await runSync(
-					this.app,
-					this.plugin.settings,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					selectedCalendarIds,
-				);
-				return result.normalizedEvents ?? [];
+				return this.plugin.fetchNormalizedEvents();
 			},
 		});
 

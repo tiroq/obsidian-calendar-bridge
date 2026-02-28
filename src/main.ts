@@ -13,7 +13,7 @@
  */
 
 import { Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
-import { DEFAULT_SETTINGS, PluginSettings, SubscriptionsState } from './types';
+import { DEFAULT_SETTINGS, PluginSettings, SubscriptionsState, SyncStage } from './types';
 import { CalendarBridgeSettingsTab } from './settings';
 import { runSync, SyncResult } from './sync-manager';
 import { SeriesModal, SeriesModalPlugin } from './modals/series-modal';
@@ -147,6 +147,26 @@ export default class CalendarBridgePlugin
 
 	async upsertProfile(profile: import('./types').SeriesProfile): Promise<void> {
 		await this.stateManager.upsertProfile(profile);
+	}
+
+	/**
+	 * Run sync with progress callback — used by the panel's Sync Now button.
+	 * Delegates to triggerSync internals so series gating is applied.
+	 */
+	async triggerSyncWithProgress(onProgress: (stage: SyncStage, pct: number) => void): Promise<void> {
+		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
+		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
+		await runSync(this.app, this.settings, undefined, undefined, onProgress, this.buildIsSeriesEnabled(), selectedCalendarIds);
+	}
+
+	/**
+	 * Fetch normalized events with series gating — used by panel Preview/Heatmap.
+	 */
+	async fetchNormalizedEvents(): Promise<import('./types').NormalizedEvent[]> {
+		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
+		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
+		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, this.buildIsSeriesEnabled(), selectedCalendarIds);
+		return result.normalizedEvents ?? [];
 	}
 
 	async toggleSeriesHidden(key: string, name: string): Promise<void> {
