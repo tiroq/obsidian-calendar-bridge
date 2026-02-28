@@ -19,6 +19,8 @@ import { GoogleCalendarAdapter } from './sources/gcal-source';
 import {
 	DEFAULT_TEMPLATE,
 	AUTOGEN_AGENDA_START,
+	AUTOGEN_JOINERS_START,
+	AUTOGEN_JOINERS_END,
 	fillTemplateNormalized,
 	getNotePath,
 	getNotePaths,
@@ -27,7 +29,9 @@ import {
 	buildAgendaBlock,
 	buildJoinersBlock,
 	buildLinksBlock,
+	extractExistingAttendees,
 } from './note-generator';
+import { buildContactMap } from './contacts';
 import {
 	generateSeriesAutogen,
 	generateSeriesPageContent,
@@ -330,7 +334,13 @@ export async function runSync(
 			}
 		}
 	}
-	console.log(`[CalendarBridge] TEMPLATE — using ${settings.templatePath ? `custom: ${settings.templatePath}` : 'built-in default'}`);
+console.log(`[CalendarBridge] TEMPLATE — using ${settings.templatePath ? `custom: ${settings.templatePath}` : 'built-in default'}`);
+
+	// ── Build contact map ───────────────────────────────────────────────────
+	const contactMap = settings.contactsFolder
+		? await buildContactMap(app, settings.contactsFolder)
+		: new Map<string, string>();
+	console.log(`[CalendarBridge] CONTACTS — contactsFolder="${settings.contactsFolder || '(disabled)'}" entries=${contactMap.size}`);
 
 	// ── Build series map ────────────────────────────────────────────────────
 	// groupBySeries still takes CalendarEvent — use a shim
@@ -397,6 +407,7 @@ export async function runSync(
 				event,
 				settings: { ...settings, meetingsRoot: notesFolder, seriesRoot: seriesFolder } as PluginSettings,
 				seriesPagePath,
+				contactMap,
 			});
 
 			const existing = app.vault.getAbstractFileByPath(notePath);
@@ -408,8 +419,16 @@ export async function runSync(
 				let updated: string;
 
 				if (hasNamedBlocks) {
+					// Extract attendees already in the JOINERS block for union-merge
+					const joinersMatch = existingContent.match(
+						new RegExp(`<!--\\s*AUTOGEN:JOINERS:START\\s*-->[\\s\\S]*?<!--\\s*AUTOGEN:JOINERS:END\\s*-->`),
+					);
+					const extraAttendees = joinersMatch
+						? extractExistingAttendees(joinersMatch[0])
+						: [];
+
 					const agendaBody  = buildAgendaBlock(event);
-					const joinersBody = buildJoinersBlock(event, settings as PluginSettings);
+					const joinersBody = buildJoinersBlock(event, settings as PluginSettings, undefined, contactMap, extraAttendees);
 					const linksBody   = buildLinksBlock({ event, seriesPagePath });
 					updated = updateAutogenBlocksNamed(existingContent, {
 						agendaBody,
