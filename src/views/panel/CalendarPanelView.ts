@@ -10,10 +10,11 @@
  *   [ Filters ]         ← collapsible
  *   [ Preview ]         ← collapsible
  *   [ Heatmap ]         ← collapsible
+ *   [ Debug ]           ← collapsible (last sync diagnostics)
  */
 
 import { App, ItemView, WorkspaceLeaf } from 'obsidian';
-import { NormalizedEvent, RichCalendarItem, SeriesProfile, SyncStage } from '../../types';
+import { NormalizedEvent, RichCalendarItem, SeriesProfile, SyncReport, SyncStage } from '../../types';
 import { GoogleCalendarAdapter } from '../../sources/gcal-source';
 
 import { CalendarStore } from './stores/CalendarStore';
@@ -26,6 +27,7 @@ import { FiltersSection } from './sections/FiltersSection';
 import { PreviewSection } from './sections/PreviewSection';
 import { HeatmapSection } from './sections/HeatmapSection';
 import { SubscriptionsSection } from './sections/SubscriptionsSection';
+import { DebugSection } from './sections/DebugSection';
 
 export const VIEW_TYPE_CALENDAR_PANEL = 'calendar-bridge-control-panel';
 
@@ -52,6 +54,7 @@ export interface CalendarBridgePanelPlugin {
 	triggerSyncWithProgress(onProgress: (stage: import('../../types').SyncStage, pct: number) => void): Promise<void>;
 	/** Fetch normalized events (with series gating) for preview/filter use. */
 	fetchNormalizedEvents(): Promise<NormalizedEvent[]>;
+	getLastSyncReport(): SyncReport | null;
 }
 
 export class CalendarPanelView extends ItemView {
@@ -70,6 +73,7 @@ export class CalendarPanelView extends ItemView {
 	private filtersSection: FiltersSection | null = null;
 	private previewSection: PreviewSection | null = null;
 	private heatmapSection: HeatmapSection | null = null;
+	private debugSection: DebugSection | null = null;
 	/** Unsubscribe from new-candidates notifications from main plugin. */
 	private unsubNewCandidates: (() => void) | null = null;
 
@@ -219,10 +223,19 @@ export class CalendarPanelView extends ItemView {
 			},
 		});
 
-		// ── Heatmap Section ────────────────────────────────────────────────────
+		// ── Heatmap Section ──────────────────────────────────────────
 		this.heatmapSection = new HeatmapSection(scroll, this.app);
-	}
 
+		// ── Debug Section ─────────────────────────────────────────────
+		this.debugSection = new DebugSection(scroll, () => this.plugin.getLastSyncReport());
+		// Refresh debug section whenever sync completes
+		this.syncStore.subscribe((state) => {
+			if (!state.isSyncing && state.stage === 'completed') {
+				this.debugSection?.update(this.plugin.getLastSyncReport());
+			}
+		});
+
+	}
 	async onClose(): Promise<void> {
 		this.unsubNewCandidates?.();
 		this.statusHeader?.destroy();
@@ -231,6 +244,7 @@ export class CalendarPanelView extends ItemView {
 		this.subscriptionsSection?.destroy();
 		this.filtersSection?.destroy();
 		this.previewSection?.destroy();
+		this.debugSection?.destroy();
 		this.heatmapSection?.destroy();
 
 		this.unsubNewCandidates = null;
@@ -240,6 +254,7 @@ export class CalendarPanelView extends ItemView {
 		this.subscriptionsSection = null;
 		this.filtersSection = null;
 		this.previewSection = null;
+		this.debugSection = null;
 		this.heatmapSection = null;
 	}
 }

@@ -29,6 +29,7 @@ import {
 	VIEW_TYPE_CALENDAR_PANEL,
 	CalendarBridgePanelPlugin,
 } from './views/panel/CalendarPanelView';
+import { DiagnosticsService } from './services/DiagnosticsService';
 // ─── Plugin ────────────────────────────────────────────────────────────────────
 
 export default class CalendarBridgePlugin
@@ -51,6 +52,8 @@ export default class CalendarBridgePlugin
 	private newCandidatesListeners: Set<(items: import('./types').NormalizedEvent[]) => void> = new Set();
 
 
+	private diagnosticsService = new DiagnosticsService();
+	/** DiagnosticsService stores last N sync reports in memory. */
 	/** Handle returned by setInterval for auto-sync; 0 = not running. */
 	private autoSyncHandle = 0;
 
@@ -282,6 +285,11 @@ export default class CalendarBridgePlugin
 		};
 	}
 
+	/** Return the latest sync report (for the Debug panel). */
+	getLastSyncReport(): import('./types').SyncReport | null {
+		return this.diagnosticsService.getLatest();
+	}
+
 	async triggerSync(): Promise<void> {
 		const enabledSources = this.settings.sources.filter(s => s.enabled);
 		if (enabledSources.length === 0) {
@@ -292,7 +300,9 @@ export default class CalendarBridgePlugin
 		this.updateStatusBar('Syncing…');
 		new Notice('Calendar Bridge: Syncing…');
 
+	let syncStartedAt: Date;
 	let result: SyncResult;
+	syncStartedAt = new Date();
 	try {
 		// Resolve selectedCalendarIds from the first gcal_api source
 	const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
@@ -316,6 +326,8 @@ export default class CalendarBridgePlugin
 		new Notice(`Calendar Bridge: Sync failed — ${msg}`);
 		return;
 	}
+	// Record in DiagnosticsService
+	this.diagnosticsService.recordSyncResult(result, syncStartedAt);
 
 	// Persist last-sync timestamp
 	this.settings.lastSyncTime = new Date().toLocaleString();
