@@ -17,6 +17,7 @@ import { DEFAULT_SETTINGS, PluginSettings, SubscriptionsState, SyncStage } from 
 import { CalendarBridgeSettingsTab } from './settings';
 import { runSync, SyncResult } from './sync-manager';
 import { sanitizeFilename } from './note-generator';
+import { buildSyncPlan } from './services/PlanningService';
 import { SeriesModal, SeriesModalPlugin } from './modals/series-modal';
 import { PreviewModal, PreviewModalPlugin, SyncPlan, SyncPlanItem } from './modals/preview-modal';
 import {
@@ -160,7 +161,7 @@ export default class CalendarBridgePlugin
 	async triggerSyncWithProgress(onProgress: (stage: SyncStage, pct: number) => void): Promise<void> {
 		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
 		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
-		await runSync(this.app, this.settings, undefined, undefined, onProgress, this.buildIsSeriesEnabled(), selectedCalendarIds);
+		await runSync(this.app, this.settings, undefined, undefined, onProgress, this.buildIsSeriesEnabled(), selectedCalendarIds, this.buildGetSeriesProfile());
 	}
 
 	/**
@@ -169,7 +170,7 @@ export default class CalendarBridgePlugin
 	async fetchNormalizedEvents(): Promise<import('./types').NormalizedEvent[]> {
 		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
 		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
-		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, this.buildIsSeriesEnabled(), selectedCalendarIds);
+		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, this.buildIsSeriesEnabled(), selectedCalendarIds, this.buildGetSeriesProfile());
 		return result.normalizedEvents ?? [];
 	}
 
@@ -285,6 +286,11 @@ export default class CalendarBridgePlugin
 		};
 	}
 
+	/** Build the per-series profile getter callback used by all runSync() calls. */
+	private buildGetSeriesProfile(): (key: string) => import('./types').SeriesProfile | undefined {
+		return (key: string) => this.stateManager.getProfile(key);
+	}
+
 	/** Return the latest sync report (for the Debug panel). */
 	getLastSyncReport(): import('./types').SyncReport | null {
 		return this.diagnosticsService.getLatest();
@@ -319,6 +325,7 @@ export default class CalendarBridgePlugin
 			undefined,
 			isSeriesEnabled,
 			selectedCalendarIds,
+			this.buildGetSeriesProfile(),
 		);
 	} catch (err) {
 		const msg = (err as Error).message;
@@ -391,28 +398,17 @@ export default class CalendarBridgePlugin
 	 * Compute the sync plan (dry run) by re-using the sync engine in preview mode.
 	 * Falls back to a simple "run sync and map results to plan items" approach.
 	 */
-private async computeSyncPlan(): Promise<SyncPlan> {
-		// Run a real sync (which is idempotent) and capture the result as plan items.
-		// Pass selectedCalendarIds so gcal events are fetched and included in the plan.
+	private async computeSyncPlan(): Promise<SyncPlan> {
+		// Fetch events via sync, then delegate plan building to PlanningService.
 		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
 		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
-		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, this.buildIsSeriesEnabled(), selectedCalendarIds);
-
-		const items: SyncPlanItem[] = [];
+		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, this.buildIsSeriesEnabled(), selectedCalendarIds, this.buildGetSeriesProfile());
 
 		const normalizedEvents = result.normalizedEvents ?? [];
-		const { getNotePaths } = await import('./note-generator');
-		const notePathMap = getNotePaths(normalizedEvents, this.settings);
-		for (const event of normalizedEvents) {
-			const path = notePathMap.get(`${event.eventId}::${event.start}`)!;
-			const exists = this.app.vault.getAbstractFileByPath(path) !== null;
-			items.push({
-				action: exists ? 'update' : 'create',
-				path,
-				reason: exists ? 'AUTOGEN refresh' : 'new event',
-			});
-		}
-
+		const items = buildSyncPlan(this.app, {
+			events: normalizedEvents,
+			settings: this.settings,
+		});
 		return { items, errors: result.errors };
 	}
 
@@ -423,7 +419,7 @@ private async computeSyncPlan(): Promise<SyncPlan> {
 		// Apply by running the real sync (idempotent — will only write what changed)
 		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
 		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
-		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, this.buildIsSeriesEnabled(), selectedCalendarIds);
+		const result = await runSync(this.app, this.settings, undefined, undefined, undefined, this.buildIsSeriesEnabled(), selectedCalendarIds, this.buildGetSeriesProfile());
 		this.settings.lastSyncTime = new Date().toLocaleString();
 		await this.saveSettings();
 		this.updateStatusBar(`Synced ${new Date().toLocaleTimeString()}`);
