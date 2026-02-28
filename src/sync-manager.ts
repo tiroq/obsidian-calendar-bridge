@@ -13,8 +13,11 @@
  */
 
 import { App, TFile, requestUrl } from 'obsidian';
-import { injectBlocks } from './services/TemplateService';
+import { injectBlocks, CbSlot } from './services/TemplateService';
 import { resolveTemplatePath } from './services/TemplateRoutingService';
+import { ContextService } from './services/ContextService';
+import { ActionAggregationService } from './services/ActionAggregationService';
+import { MetricsService } from './services/MetricsService';
 import { NormalizedEvent, PluginSettings, SyncStage } from './types';
 import { parseAndFilterEvents } from './ics-parser';
 import { GoogleCalendarAdapter } from './sources/gcal-source';
@@ -147,6 +150,11 @@ export async function runSync(
 		newCandidates: [],
 		eventsFetched: 0, eventsEligible: 0, notesPlanned: 0,
 	};
+
+	// ── Premium services (instantiated once per sync, caching is per-instance) ──
+	const contextService = new ContextService(app);
+	const actionService  = new ActionAggregationService(app);
+	const metricsService = new MetricsService(app);
 	const _logSources = (settings.calendarSources ?? []).length > 0 ? settings.calendarSources! : (settings.sources ?? []);
 	console.log(`[CalendarBridge] SYNC_START`);
 	console.log(`[CalendarBridge] SYNC_CONFIG — horizonDays=${settings.syncHorizonDays ?? settings.horizonDays ?? 3} from=${new Date(now).toISOString().slice(0,10)} enabledSources=${_logSources.filter(s => s.enabled).length}`);
@@ -437,6 +445,28 @@ export async function runSync(
 				contactMap,
 			});
 
+
+			// ── Build CB slot content from premium services (series-scoped, cached) ──
+			const cbBlocks: Partial<Record<CbSlot, string>> = {};
+			if (event.seriesKey && event.isRecurring) {
+				try {
+					const ctxResult = await contextService.buildContext({
+						seriesKey: event.seriesKey,
+						notesFolder,
+						maxLookback: 3,
+					});
+					if (ctxResult.content) cbBlocks['CB_CONTEXT'] = ctxResult.content;
+				} catch { /* non-fatal — premium feature degraded silently */ }
+				try {
+					const actResult = await actionService.aggregateActions({
+						seriesKey: event.seriesKey,
+						notesFolder,
+						maxLookback: 5,
+					});
+					if (actResult.content) cbBlocks['CB_ACTIONS'] = actResult.content;
+				} catch { /* non-fatal — premium feature degraded silently */ }
+			}
+
 			const existing = app.vault.getAbstractFileByPath(notePath);
 			if (existing instanceof TFile) {
 				const existingContent = await app.vault.read(existing);
@@ -465,9 +495,11 @@ export async function runSync(
 				} else {
 					updated = updateAutogenBlocks(existingContent, newContent);
 				}
-				// Apply CB slot injection (idempotent — updates existing CB blocks, no-op if none present)
-				updated = injectBlocks(updated, {});
 
+
+
+				// Apply CB slot injection with premium content (idempotent)
+				updated = injectBlocks(updated, cbBlocks);
 				if (updated !== existingContent) {
 					console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → UPDATE ${notePath} (AUTOGEN changed)`);
 					await app.vault.modify(existing, updated);
@@ -484,8 +516,8 @@ export async function runSync(
 					await ensureFolderExists(app, parentFolder);
 				}
 				console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → CREATE ${notePath}`);
-				// Apply CB slot injection to new note (handles {{CB_SLOT}} tokens if present)
-				const contentWithCb = injectBlocks(newContent, {});
+				// Apply CB slot injection to new note with premium content
+				const contentWithCb = injectBlocks(newContent, cbBlocks);
 				await app.vault.create(notePath, contentWithCb);
 				result.created++;
 			}
@@ -504,11 +536,26 @@ export async function runSync(
 		try {
 			const existing = app.vault.getAbstractFileByPath(seriesPath);
 			console.log(`[CalendarBridge] SERIES_PATH — "${series.title}" → ${seriesPath}`);
+
+			// ── Compute metrics block for this series (non-fatal) ─────────────────────
+			let metricsBlock = '';
+			try {
+				metricsBlock = await metricsService.renderMetricsBlock({
+					seriesKey: series.uid,
+					notesFolder,
+				});
+			} catch { /* non-fatal */ }
 			if (existing instanceof TFile) {
 				const existingContent = await app.vault.read(existing);
 				const autogenBody     = generateSeriesAutogen(series, notePathFn, now);
 				const newBlock        = wrapAutogen(autogenBody);
-				const updated         = updateAutogenBlocks(existingContent, newBlock);
+				// Re-inject metrics into CB_DIAGNOSTICS slot (idempotent)
+				const metricsSlotContent = metricsBlock ? `## Series Health\n\n${metricsBlock}` : '';
+				const cbBlocks: Partial<Record<CbSlot, string>> = metricsSlotContent
+					? { CB_DIAGNOSTICS: metricsSlotContent }
+					: {};
+				let updated = updateAutogenBlocks(existingContent, newBlock);
+				updated = injectBlocks(updated, cbBlocks);
 				if (updated !== existingContent) {
 					console.log(`[CalendarBridge] SERIES_ACTION — "${series.title}" → UPDATE ${seriesPath}`);
 					await app.vault.modify(existing, updated);
@@ -519,7 +566,13 @@ export async function runSync(
 				}
 			} else {
 				console.log(`[CalendarBridge] SERIES_ACTION — "${series.title}" → CREATE ${seriesPath}`);
-				const content = generateSeriesPageContent(series, notePathFn, now);
+				const rawContent = generateSeriesPageContent(series, notePathFn, now);
+				// Append metrics as a CB_DIAGNOSTICS slot when available
+				const metricsSlotContent = metricsBlock ? `## Series Health\n\n${metricsBlock}` : '';
+				const cbBlocks: Partial<Record<CbSlot, string>> = metricsSlotContent
+					? { CB_DIAGNOSTICS: metricsSlotContent }
+					: {};
+				const content = injectBlocks(rawContent, cbBlocks);
 				await app.vault.create(seriesPath, content);
 				result.created++;
 			}
