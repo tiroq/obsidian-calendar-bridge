@@ -253,9 +253,11 @@ export default class CalendarBridgePlugin
 		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
 		// Pass stateManager.isEnabled so sync respects per-series opt-in.
 		// Returns undefined for unknown keys so they land in newCandidates.
-		const isSeriesEnabled = (key: string): boolean | undefined => {
+		const isSeriesEnabled = (key: string, isRecurring?: boolean): boolean | undefined => {
+			// Single (non-recurring) events are always synced — they have no series to subscribe to.
+			if (!isRecurring) return true;
 			const profile = this.stateManager.getProfile(key);
-			if (!profile) return undefined; // unknown — new candidate
+			if (!profile) return undefined; // unknown recurring series — new candidate
 			return profile.enabled;
 		};
 		result = await runSync(
@@ -284,13 +286,20 @@ export default class CalendarBridgePlugin
 		this.onNewCandidates(result.newCandidates!);
 	}
 
-	const { created, updated, skipped, errors } = result;
+	const { created, updated, skipped, errors, eventsFetched, eventsEligible, zeroReason } = result;
 	const parts: string[] = [];
 	if (created > 0) parts.push(`${created} created`);
 	if (updated > 0) parts.push(`${updated} updated`);
 	if (skipped > 0) parts.push(`${skipped} unchanged`);
 
-	const summary = parts.length > 0 ? parts.join(', ') : 'Nothing to do';
+	let summary: string;
+	if (parts.length > 0) {
+		summary = parts.join(', ') + ` (fetched ${eventsFetched}, eligible ${eventsEligible})`;
+	} else if (zeroReason) {
+		summary = zeroReason;
+	} else {
+		summary = 'Nothing to do';
+	}
 	const errStr = errors.length > 0 ? ` ⚠ ${errors.length} error(s)` : '';
 
 	this.updateStatusBar(`Synced ${new Date().toLocaleTimeString()}`);

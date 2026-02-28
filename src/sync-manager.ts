@@ -42,13 +42,22 @@ export interface SyncResult {
 	updated: number;
 	skipped: number;
 	errors: string[];
-	/** All NormalizedEvents processed in this sync (populated by runSync). */
+	/** All NormalizedEvents fetched (before any filtering). */
 	normalizedEvents?: import('./types').NormalizedEvent[];
 	/**
 	 * Events whose seriesKey was not yet in the subscription profiles.
 	 * Populated only when isSeriesEnabled is provided.
 	 */
 	newCandidates?: import('./types').NormalizedEvent[];
+	// ── Diagnostic counters (always populated) ──────────────────────
+	/** Total events fetched from all sources before any filtering. */
+	eventsFetched: number;
+	/** Events remaining after calendar-ID and series filters. */
+	eventsEligible: number;
+	/** Notes that were planned for creation/update (eligible events). */
+	notesPlanned: number;
+	/** Reason string when 0 eligible events (human-readable). */
+	zeroReason?: string;
 }
 
 /** Signature of the HTTP fetch function (injectable for tests). */
@@ -118,12 +127,18 @@ export async function runSync(
 	 *  - events with unknown seriesKeys are collected in result.newCandidates
 	 *  - events whose seriesKey returns false are skipped
 	 * When omitted, all events are synced (legacy / preview mode).
+	 * The second argument `isRecurring` lets the callback skip gating for one-off events.
 	 */
-	isSeriesEnabled?: (seriesKey: string) => boolean | undefined,
+	isSeriesEnabled?: (seriesKey: string, isRecurring: boolean) => boolean | undefined,
 	/** When provided, only events from these calendar IDs are synced. */
 	selectedCalendarIds?: string[],
 ): Promise<SyncResult> {
-	const result: SyncResult = { created: 0, updated: 0, skipped: 0, errors: [], newCandidates: [] };
+	const result: SyncResult = {
+		created: 0, updated: 0, skipped: 0, errors: [],
+		newCandidates: [],
+		eventsFetched: 0, eventsEligible: 0, notesPlanned: 0,
+	};
+	console.log('[CalendarBridge] SYNC_START');
 	onProgress?.('authenticating', 5);
 
 	// ── Resolve settings with legacy fallbacks ───────────────────────────
@@ -225,6 +240,11 @@ export async function runSync(
 		}
 	}
 
+	// ── Fetch complete ──────────────────────────────────────────────────────
+	result.eventsFetched = allEvents.length;
+	console.log(`[CalendarBridge] FETCH_EVENTS_DONE — fetched ${allEvents.length} event(s)`);
+
+	// ── Filter by selected calendar IDs (gcal only) ─────────────────────────
 	// ── Filter by selected calendar IDs (gcal only) ─────────────────────────
 	const gcalCalendarFilter = selectedCalendarIds && selectedCalendarIds.length > 0
 		? new Set(selectedCalendarIds)
@@ -239,8 +259,10 @@ export async function runSync(
 			continue;
 		}
 		// Apply per-series filter when provided
-		if (isSeriesEnabled && event.seriesKey) {
-			const enabled = isSeriesEnabled(event.seriesKey);
+		// Apply per-series filter when provided — only for recurring events.
+		// Single (non-recurring) events have no series to subscribe to and always sync.
+		if (isSeriesEnabled && event.seriesKey && event.isRecurring) {
+			const enabled = isSeriesEnabled(event.seriesKey, event.isRecurring);
 			if (enabled === undefined) {
 				// Unknown series — add to newCandidates but skip sync
 				result.newCandidates!.push(event);
@@ -255,7 +277,24 @@ export async function runSync(
 		filteredEvents.push(event);
 	}
 
-	if (filteredEvents.length === 0 && result.errors.length === 0) {
+	result.eventsEligible = filteredEvents.length;
+	result.notesPlanned  = filteredEvents.length;
+	console.log(`[CalendarBridge] PLAN_NOTES_DONE — eligible ${filteredEvents.length}/${allEvents.length} event(s)`);
+
+	if (filteredEvents.length === 0) {
+		// Compute a human-readable reason for the empty plan
+		if (result.errors.length > 0) {
+			result.zeroReason = `Fetch errors: ${result.errors[0]}`;
+		} else if (allEvents.length === 0) {
+			result.zeroReason = 'No eligible events in sync window';
+		} else if (isSeriesEnabled && (result.newCandidates?.length ?? 0) === allEvents.length) {
+			result.zeroReason = 'All recurring events are unsubscribed — enable series in the Series panel';
+		} else if (isSeriesEnabled) {
+			result.zeroReason = 'Series selection excluded all events';
+		} else {
+			result.zeroReason = 'All events filtered out';
+		}
+		console.log(`[CalendarBridge] WRITE_FILES_DONE — 0 files written. Reason: ${result.zeroReason}`);
 		result.normalizedEvents = allEvents;
 		return result;
 	}
@@ -406,7 +445,10 @@ export async function runSync(
 		}
 	}
 
+
+	console.log(`[CalendarBridge] RENDER_TEMPLATES_DONE — template applied to ${filteredEvents.length} event(s)`);
 	onProgress?.('completed', 100);
+	console.log(`[CalendarBridge] WRITE_FILES_DONE — created:${result.created} updated:${result.updated} skipped:${result.skipped} errors:${result.errors.length}`);
 	result.normalizedEvents = allEvents;
 	return result;
 }

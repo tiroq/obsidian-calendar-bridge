@@ -397,31 +397,31 @@ describe('runSync — edge cases', () => {
 // ─── isSeriesEnabled filter ──────────────────────────────────────────────────
 
 describe('runSync — isSeriesEnabled filter', () => {
-	it('syncs events whose seriesKey is enabled (returns true)', async () => {
+	it('syncs recurring events whose seriesKey is enabled (returns true)', async () => {
 		const app = new App();
 		const settings = makeSettings();
-		const isSeriesEnabled = (key: string) => key === 'single:one-off-001@test' ? true as boolean | undefined : undefined as boolean | undefined;
-		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, isSeriesEnabled);
-		expect(result.created).toBe(1);
+		const isSeriesEnabled = (key: string) => key.includes('standup') ? true as boolean | undefined : undefined as boolean | undefined;
+		const result = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.created).toBeGreaterThanOrEqual(1);
 		expect(result.newCandidates).toHaveLength(0);
 	});
 
-	it('skips events whose seriesKey is disabled (returns false)', async () => {
+	it('skips recurring events whose seriesKey is disabled (returns false)', async () => {
 		const app = new App();
 		const settings = makeSettings();
 		const isSeriesEnabled = (_key: string): boolean | undefined => false;
-		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, isSeriesEnabled);
+		const result = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
 		expect(result.created).toBe(0);
 		expect(result.skipped).toBeGreaterThanOrEqual(1);
 	});
 
-	it('pushes unknown seriesKey events to newCandidates and skips them', async () => {
+	it('pushes unknown recurring seriesKey events to newCandidates and skips them', async () => {
 		const app = new App();
 		const settings = makeSettings();
 		const isSeriesEnabled = (_key: string): boolean | undefined => undefined;
-		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, isSeriesEnabled);
+		const result = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
 		expect(result.created).toBe(0);
-		expect(result.newCandidates).toHaveLength(1);
+		expect(result.newCandidates!.length).toBeGreaterThan(0);
 	});
 
 	it('syncs enabled recurring events and skips disabled ones', async () => {
@@ -497,13 +497,13 @@ describe('runSync — newCandidates result', () => {
 		expect(result.newCandidates).toHaveLength(0);
 	});
 
-	it('newCandidates contains correct event data for unknown series', async () => {
+	it('newCandidates contains correct event data for unknown recurring series', async () => {
 		const app = new App();
 		const settings = makeSettings();
 		const isSeriesEnabled = (_key: string): boolean | undefined => undefined;
-		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, isSeriesEnabled);
-		expect(result.newCandidates).toHaveLength(1);
-		expect(result.newCandidates![0].title).toBe('Project Kickoff');
+		const result = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.newCandidates!.length).toBeGreaterThan(0);
+		expect(result.newCandidates![0].title).toBe('Daily Standup');
 	});
 
 	it('normalizedEvents is populated with all fetched events', async () => {
@@ -657,5 +657,173 @@ describe('runSync — Google Calendar source', () => {
 		);
 		expect(result.normalizedEvents?.some(e => e.source === 'gcal_api')).toBe(true);
 		expect(result.normalizedEvents?.some(e => e.source !== 'gcal_api')).toBe(true);
+	});
+});
+
+// ─── Series gating: single events always sync ───────────────────────────────
+
+describe('runSync — series gating: single events always create files', () => {
+	beforeEach(() => { jest.clearAllMocks(); });
+
+	it('creates file for single event even when isSeriesEnabled returns undefined for all keys', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string, _isRecurring: boolean): boolean | undefined => undefined;
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.errors).toHaveLength(0);
+		expect(result.created).toBe(1);
+		const files = (app.vault as Vault).listFiles();
+		expect(files.some(f => f.includes('Project Kickoff'))).toBe(true);
+	});
+
+	it('single event is NOT pushed to newCandidates', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string, _isRecurring: boolean): boolean | undefined => undefined;
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.newCandidates).toHaveLength(0);
+	});
+
+	it('eventsFetched, eventsEligible, notesPlanned are all 1 for a single event', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+		expect(result.eventsFetched).toBe(1);
+		expect(result.eventsEligible).toBe(1);
+		expect(result.notesPlanned).toBe(1);
+	});
+});
+
+// ─── Series gating: recurring events respect subscription ────────────────────
+
+describe('runSync — series gating: recurring events respect subscription', () => {
+	beforeEach(() => { jest.clearAllMocks(); });
+
+	it('unknown recurring series → newCandidates populated, no file created', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string, isRecurring: boolean): boolean | undefined => {
+			if (!isRecurring) return true;
+			return undefined; // unknown recurring series
+		};
+		const result = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.created).toBe(0);
+		expect((result.newCandidates?.length ?? 0)).toBeGreaterThan(0);
+	});
+
+	it('enabled recurring series → files created', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string, isRecurring: boolean): boolean | undefined => {
+			if (!isRecurring) return true;
+			return true; // explicitly enabled
+		};
+		const result = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.created).toBeGreaterThan(0);
+	});
+
+	it('disabled recurring series → skipped, no file, not in newCandidates', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string, isRecurring: boolean): boolean | undefined => {
+			if (!isRecurring) return true;
+			return false; // explicitly disabled
+		};
+		const result = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.created).toBe(0);
+		expect(result.newCandidates).toHaveLength(0);
+	});
+});
+
+// ─── zeroReason ──────────────────────────────────────────────────────────────
+
+describe('runSync — zeroReason', () => {
+	beforeEach(() => { jest.clearAllMocks(); });
+
+	it('zeroReason mentions series when all recurring events excluded by gating', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string, isRecurring: boolean): boolean | undefined => {
+			if (!isRecurring) return true;
+			return undefined; // all recurring → newCandidates
+		};
+		const result = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.created).toBe(0);
+		expect(result.zeroReason).toBeDefined();
+		expect(result.zeroReason).toMatch(/series/i);
+	});
+
+	it('zeroReason set when no events in ICS window', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const result = await runSync(app as never, settings, async () => 'BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR', NOW);
+		expect(result.eventsFetched).toBe(0);
+		expect(result.zeroReason).toBeDefined();
+		expect(result.zeroReason).toMatch(/No eligible events/i);
+	});
+
+	it('zeroReason is undefined when events are created', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+		expect(result.created).toBe(1);
+		expect(result.zeroReason).toBeUndefined();
+	});
+});
+
+// ─── Idempotency ─────────────────────────────────────────────────────────────
+
+describe('runSync — idempotency with series-gated events', () => {
+	beforeEach(() => { jest.clearAllMocks(); });
+
+	it('running sync twice for a single event creates exactly 1 file', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+		const result2 = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+		const files = (app.vault as Vault).listFiles();
+		const kickoffFiles = files.filter(f => f.includes('Project Kickoff'));
+		expect(kickoffFiles).toHaveLength(1);
+		expect(result2.created).toBe(0); // already exists — skipped or updated, not re-created
+	});
+
+	it('running sync twice for recurring event (enabled) creates N files exactly once', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string, isRecurring: boolean): boolean | undefined => {
+			if (!isRecurring) return true;
+			return true;
+		};
+		const r1 = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
+		const r2 = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
+		expect(r1.created).toBeGreaterThan(0);
+		expect(r2.created).toBe(0); // all already exist
+	});
+});
+
+// ─── Diagnostic counts ───────────────────────────────────────────────────────
+
+describe('runSync — diagnostic counts', () => {
+	beforeEach(() => { jest.clearAllMocks(); });
+
+	it('eventsFetched reflects total events from ICS regardless of filtering', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const isSeriesEnabled = (_key: string, isRecurring: boolean): boolean | undefined => {
+			if (!isRecurring) return true;
+			return false; // disable all recurring
+		};
+		// RECURRING_ICS expands to 3 occurrences (COUNT=3)
+		const result = await runSync(app as never, settings, async () => RECURRING_ICS, NOW, undefined, isSeriesEnabled);
+		expect(result.eventsFetched).toBeGreaterThan(0);
+		expect(result.eventsEligible).toBe(0);
+		expect(result.created).toBe(0);
+	});
+
+	it('eventsEligible equals eventsFetched when no series filter applied', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		const result = await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+		expect(result.eventsEligible).toBe(result.eventsFetched);
 	});
 });
