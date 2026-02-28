@@ -138,7 +138,11 @@ export async function runSync(
 		newCandidates: [],
 		eventsFetched: 0, eventsEligible: 0, notesPlanned: 0,
 	};
-	console.log('[CalendarBridge] SYNC_START');
+	const _logSources = (settings.calendarSources ?? []).length > 0 ? settings.calendarSources! : (settings.sources ?? []);
+	console.log(`[CalendarBridge] SYNC_START`);
+	console.log(`[CalendarBridge] SYNC_CONFIG — horizonDays=${settings.syncHorizonDays ?? settings.horizonDays ?? 3} from=${new Date(now).toISOString().slice(0,10)} enabledSources=${_logSources.filter(s => s.enabled).length}`);
+	console.log(`[CalendarBridge] SYNC_PATHS — notesFolder="${settings.notesFolder ?? settings.meetingsRoot ?? 'Meetings'}" seriesFolder="${settings.seriesFolder ?? settings.seriesRoot ?? 'Meetings/_series'}" templatePath="${settings.templatePath || '(built-in)'}"`);
+	console.log(`[CalendarBridge] SYNC_FLAGS — usingLegacySources=${(settings.calendarSources ?? []).length > 0} selectedCalendarIds=${selectedCalendarIds ? JSON.stringify(selectedCalendarIds) : 'none'} isSeriesEnabled=${!!isSeriesEnabled}`);
 	onProgress?.('authenticating', 5);
 
 	// ── Resolve settings with legacy fallbacks ───────────────────────────
@@ -166,15 +170,17 @@ export async function runSync(
 
 	onProgress?.('fetching-events', 15);
 	for (const source of allSources) {
-		if (!source.enabled) continue;
+		if (!source.enabled) { console.log(`[CalendarBridge] SOURCE_SKIP — id=${source.id} name="${source.name}" (disabled)`); continue; }
 		const url = (source as { url?: string }).url
 			?? source.ics?.url
 			?? '';
-		if (!url) continue;
+		if (!url) { console.log(`[CalendarBridge] SOURCE_SKIP — id=${source.id} name="${source.name}" (no URL)`); continue; }
 
 		try {
+			console.log(`[CalendarBridge] SOURCE_FETCH — id=${source.id} name="${source.name}" type=ics_public`);
 			const icsData = await fetchFn(url);
 			const parsed  = parseAndFilterEvents(icsData, from, to);
+			console.log(`[CalendarBridge] SOURCE_PARSED — id=${source.id} name="${source.name}" raw=${parsed.length} events in window [${from.toISOString()} → ${to.toISOString()}]`);
 			for (const e of parsed) {
 				const normalized: NormalizedEvent = {
 					source:      'ics_public',
@@ -209,7 +215,7 @@ export async function runSync(
 
 	// ── Fetch Google Calendar events ──────────────────────────────────────
 	for (const source of allSources) {
-		if (!source.enabled) continue;
+		if (!source.enabled) { console.log(`[CalendarBridge] GCAL_SKIP — id=${source.id} name="${source.name}" (disabled)`); continue; }
 		if (source.sourceType !== 'gcal_api') continue;
 		const gcalSettings = (source as { google?: import('./types').GoogleApiSettings }).google;
 		if (!gcalSettings) continue;
@@ -230,7 +236,9 @@ export async function runSync(
 
 		for (const calId of targets) {
 			try {
+				console.log(`[CalendarBridge] GCAL_FETCH — source="${source.name}" calId=${calId}`);
 				const events = await adapter.listEvents(calId, from, to);
+				console.log(`[CalendarBridge] GCAL_FETCHED — source="${source.name}" calId=${calId} events=${events.length}`);
 				allEvents.push(...events);
 			} catch (err) {
 				result.errors.push(
@@ -255,6 +263,7 @@ export async function runSync(
 	for (const event of allEvents) {
 		// Skip gcal events whose calendar was not selected
 		if (gcalCalendarFilter && event.source === 'gcal_api' && !gcalCalendarFilter.has(event.calendarId)) {
+			console.log(`[CalendarBridge] EVENT_GATE — "${event.title}" calendarId=${event.calendarId} → SKIP (not in gcalCalendarFilter)`);
 			result.skipped++;
 			continue;
 		}
@@ -263,6 +272,7 @@ export async function runSync(
 		// Single (non-recurring) events have no series to subscribe to and always sync.
 		if (isSeriesEnabled && event.seriesKey && event.isRecurring) {
 			const enabled = isSeriesEnabled(event.seriesKey, event.isRecurring);
+			console.log(`[CalendarBridge] EVENT_GATE — "${event.title}" seriesKey=${event.seriesKey} recurring=true enabled=${enabled} → ${enabled === undefined ? 'CANDIDATE (new series)' : enabled ? 'SYNC' : 'SKIP (disabled series)'}`);
 			if (enabled === undefined) {
 				// Unknown series — add to newCandidates but skip sync
 				result.newCandidates!.push(event);
@@ -275,6 +285,11 @@ export async function runSync(
 			}
 		}
 		filteredEvents.push(event);
+		if (isSeriesEnabled && !event.isRecurring) {
+			console.log(`[CalendarBridge] EVENT_GATE — "${event.title}" recurring=false → SYNC (non-recurring bypass)`);
+		} else if (!isSeriesEnabled) {
+			console.log(`[CalendarBridge] EVENT_GATE — "${event.title}" → SYNC (no series gating)`);
+		}
 	}
 
 	result.eventsEligible = filteredEvents.length;
@@ -314,6 +329,7 @@ export async function runSync(
 			}
 		}
 	}
+	console.log(`[CalendarBridge] TEMPLATE — using ${settings.templatePath ? `custom: ${settings.templatePath}` : 'built-in default'}`);
 
 	// ── Build series map ────────────────────────────────────────────────────
 	// groupBySeries still takes CalendarEvent — use a shim
@@ -356,6 +372,7 @@ export async function runSync(
 		seriesFolder,
 		meetingsRoot: usingLegacySources ? undefined : (settings.meetingsRoot ?? notesFolder),
 	};
+	console.log(`[CalendarBridge] PATH_SETTINGS — usingLegacySources=${usingLegacySources} meetingsRoot="${pathSettings.meetingsRoot ?? '(none)'}" notesFolder="${notesFolder}" seriesFolder="${seriesFolder}"`);
 
 	onProgress?.('applying-filters', 50);
 	// ── Create / update meeting notes ───────────────────────────────────────
@@ -363,7 +380,7 @@ export async function runSync(
 	for (const event of filteredEvents) {
 		try {
 			const notePath = getNotePath(event, pathSettings);
-			console.log(`[CalendarBridge] NOTE_PATH — "${event.title}" → ${notePath}`);
+			console.log(`[CalendarBridge] NOTE_PATH — "${event.title}" start=${event.start} recurring=${event.isRecurring} → ${notePath}`);
 			const seriesPagePath = event.isRecurring
 				? (() => {
 					const sp = getSeriesPath(event.title, { ...settings, seriesFolder });
@@ -400,15 +417,21 @@ export async function runSync(
 				}
 
 				if (updated !== existingContent) {
+					console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → UPDATE ${notePath} (AUTOGEN changed)`);
 					await app.vault.modify(existing, updated);
 					result.updated++;
 				} else {
+					console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → SKIP ${notePath} (no changes)`);
 					result.skipped++;
 				}
 			} else {
 				// Ensure the parent folder exists (handles date subfolders like Meetings/2026-02-28/)
 				const parentFolder = notePath.includes('/') ? notePath.split('/').slice(0, -1).join('/') : '';
-				if (parentFolder) await ensureFolderExists(app, parentFolder);
+				if (parentFolder) {
+					console.log(`[CalendarBridge] ENSURE_FOLDER — "${parentFolder}"`);
+					await ensureFolderExists(app, parentFolder);
+				}
+				console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → CREATE ${notePath}`);
 				await app.vault.create(notePath, newContent);
 				result.created++;
 			}
@@ -426,18 +449,22 @@ export async function runSync(
 
 		try {
 			const existing = app.vault.getAbstractFileByPath(seriesPath);
+			console.log(`[CalendarBridge] SERIES_PATH — "${series.title}" → ${seriesPath}`);
 			if (existing instanceof TFile) {
 				const existingContent = await app.vault.read(existing);
 				const autogenBody     = generateSeriesAutogen(series, notePathFn, now);
 				const newBlock        = wrapAutogen(autogenBody);
 				const updated         = updateAutogenBlocks(existingContent, newBlock);
 				if (updated !== existingContent) {
+					console.log(`[CalendarBridge] SERIES_ACTION — "${series.title}" → UPDATE ${seriesPath}`);
 					await app.vault.modify(existing, updated);
 					result.updated++;
 				} else {
+					console.log(`[CalendarBridge] SERIES_ACTION — "${series.title}" → SKIP ${seriesPath} (no changes)`);
 					result.skipped++;
 				}
 			} else {
+				console.log(`[CalendarBridge] SERIES_ACTION — "${series.title}" → CREATE ${seriesPath}`);
 				const content = generateSeriesPageContent(series, notePathFn, now);
 				await app.vault.create(seriesPath, content);
 				result.created++;

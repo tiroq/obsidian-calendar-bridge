@@ -166,11 +166,15 @@ export class PreviewSection {
 		console.log(`[CalendarBridge] PREVIEW_FETCH — fetched ${allFetched.length} events, now=${new Date().toISOString()}`);
 		allFetched.forEach(e => console.log(`[CalendarBridge]   event: "${e.title}" start=${e.startDate?.toISOString()} future=${e.startDate >= new Date()}`));
 		// Sort by start ascending, take first 5 for display
+		const filters = this.opts.filterStore.getState();
+		console.log(`[CalendarBridge] PREVIEW_FILTERS — state=${JSON.stringify({ panelIncludeAllDay: filters.panelIncludeAllDay, panelIncludeDeclined: filters.panelIncludeDeclined, panelOnlyWithAttendees: filters.panelOnlyWithAttendees, panelSkipShorterThanMin: filters.panelSkipShorterThanMin, panelExcludeTitles: filters.panelExcludeTitles, panelIncludeTitles: filters.panelIncludeTitles })}`);
+		// Sort by start ascending, take first 5 for display
 		this.events = allFetched
 			.filter(e => e.startDate >= new Date())
 			.sort((a, b) => a.startDate.getTime() - b.startDate.getTime())
 			.slice(0, 5);
-		console.log(`[CalendarBridge] PREVIEW_FILTERED — showing ${this.events.length} upcoming events`);
+		const futureCount = allFetched.filter(e => e.startDate >= new Date()).length;
+		console.log(`[CalendarBridge] PREVIEW_FUTURE — futureCount=${futureCount}/${allFetched.length} (events with startDate >= now)`);
 		} catch (err) {
 			this.listContainer.empty();
 			const errEl = this.listContainer.createDiv();

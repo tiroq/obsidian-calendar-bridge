@@ -249,15 +249,23 @@ export default class CalendarBridgePlugin
 	let result: SyncResult;
 	try {
 		// Resolve selectedCalendarIds from the first gcal_api source
-		const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
+	const gcalSource = this.settings.sources.find(s => s.sourceType === 'gcal_api' && s.enabled);
 		const selectedCalendarIds = gcalSource?.google?.selectedCalendarIds;
+		console.log(`[CalendarBridge] TRIGGER_SYNC — sources=${enabledSources.length} gcal=${!!gcalSource} selectedCalendarIds=${selectedCalendarIds ? JSON.stringify(selectedCalendarIds) : 'none'}`);
 		// Pass stateManager.isEnabled so sync respects per-series opt-in.
 		// Returns undefined for unknown keys so they land in newCandidates.
 		const isSeriesEnabled = (key: string, isRecurring?: boolean): boolean | undefined => {
 			// Single (non-recurring) events are always synced — they have no series to subscribe to.
-			if (!isRecurring) return true;
+			if (!isRecurring) {
+				console.log(`[CalendarBridge] SERIES_GATE — key=${key} recurring=false → true (bypass)`);
+				return true;
+			}
 			const profile = this.stateManager.getProfile(key);
-			if (!profile) return undefined; // unknown recurring series — new candidate
+			if (!profile) {
+				console.log(`[CalendarBridge] SERIES_GATE — key=${key} recurring=true profile=NOT_FOUND → undefined (new candidate)`);
+				return undefined; // unknown recurring series — new candidate
+			}
+			console.log(`[CalendarBridge] SERIES_GATE — key=${key} recurring=true profile.enabled=${profile.enabled} → ${profile.enabled}`);
 			return profile.enabled;
 		};
 		result = await runSync(
