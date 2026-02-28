@@ -17,6 +17,7 @@
  */
 
 import { AttendeeInfo, CalendarEvent, NormalizedEvent, PluginSettings, SeriesProfile } from './types';
+import { ContactMap } from './contacts';
 
 // ─── Flexible settings alias ──────────────────────────────────────────────────
 // Allows both the new PluginSettings and the legacy shape used in tests.
@@ -245,6 +246,7 @@ export function buildFrontmatter(
 	event: NormalizedEvent,
 	settings: PluginSettings,
 	seriesProfile?: SeriesProfile,
+	contactMap?: ContactMap,
 ): string {
 	const seriesName = seriesProfile?.seriesName ?? event.title;
 	const tags       = buildTags(event, seriesProfile);
@@ -275,8 +277,13 @@ export function buildFrontmatter(
 		if (event.attendees && event.attendees.length > 0) {
 			lines.push(`attendees:`);
 			for (const a of event.attendees) {
-				const label = a.name ? `${a.name} <${a.email}>` : a.email;
-				lines.push(`  - ${yamlString(label)}`);
+				const noteName = contactMap?.get(a.email.toLowerCase());
+				if (noteName) {
+					lines.push(`  - "[[${noteName}]]"`);
+				} else {
+					const label = a.name ? `${a.name} <${a.email}>` : a.email;
+					lines.push(`  - ${yamlString(label)}`);
+				}
 			}
 		}
 		if (event.location)       lines.push(`location: ${yamlString(event.location)}`);
@@ -330,12 +337,24 @@ export function buildJoinersBlock(
 	event: NormalizedEvent,
 	settings: PluginSettings,
 	profile?: SeriesProfile,
+	contactMap?: ContactMap,
+	extraAttendees?: AttendeeInfo[],
 ): string {
 	if (settings.redactionMode) {
 		return '## Attendees\n\n*(redacted)*';
 	}
 
 	const attendees = applyAttendeeFilters(event.attendees ?? [], profile);
+
+	// Union-merge: include any extra attendees not already in the list
+	if (extraAttendees && extraAttendees.length > 0) {
+		const existing = new Set(attendees.map(a => a.email.toLowerCase()));
+		for (const ea of extraAttendees) {
+			if (!existing.has(ea.email.toLowerCase())) {
+				attendees.push(ea);
+			}
+		}
+	}
 
 	if (attendees.length === 0) {
 		return '## Attendees\n\n*(Unknown — no attendee data available)*';
@@ -348,13 +367,13 @@ export function buildJoinersBlock(
 	if (required.length > 0) {
 		lines.push('');
 		lines.push('**Required:**');
-		for (const a of required) lines.push(formatAttendee(a));
+		for (const a of required) lines.push(formatAttendee(a, contactMap));
 	}
 
 	if (optional.length > 0) {
 		lines.push('');
 		lines.push('**Optional:**');
-		for (const a of optional) lines.push(formatAttendee(a));
+		for (const a of optional) lines.push(formatAttendee(a, contactMap));
 	}
 
 	return lines.join('\n');
@@ -378,12 +397,68 @@ function applyAttendeeFilters(
 	return result;
 }
 
-function formatAttendee(a: AttendeeInfo): string {
+function formatAttendee(a: AttendeeInfo, contactMap?: ContactMap): string {
+	const noteName = contactMap?.get(a.email.toLowerCase());
+	if (noteName) {
+		return `- [[${noteName}]]`;
+	}
 	const name   = a.name ? `@${a.name} <${a.email}>` : `@${a.email}`;
 	const status = a.responseStatus && a.responseStatus !== 'needsAction'
 		? ` (${a.responseStatus})`
 		: '';
 	return `- ${name}${status}`;
+}
+
+/**
+ * Extract attendee email addresses and wikilink note names already present
+ * in an existing JOINERS block text.
+ * Used for union-merge: attendees already written to the note are preserved.
+ *
+ * Recognises two patterns:
+ *   - [[NoteName]]  (contact-linked)
+ *   - @Name <email> or @email  (plain)
+ */
+export function extractExistingAttendees(joinersBlockText: string): AttendeeInfo[] {
+	const result: AttendeeInfo[] = [];
+	const seenEmails = new Set<string>();
+
+	// Pattern 1: [[NoteName]] — we can only carry the name, no email known.
+	// We preserve them as a special sentinel with email = '[[NoteName]]'
+	// so the union-merge doesn't lose them.
+	const wikilinkRe = /\[\[([^\]]+)\]\]/g;
+	let wm: RegExpExecArray | null;
+	while ((wm = wikilinkRe.exec(joinersBlockText)) !== null) {
+		const sentinel = `[[${wm[1]}]]`;
+		if (!seenEmails.has(sentinel)) {
+			seenEmails.add(sentinel);
+			result.push({ email: sentinel, name: wm[1] });
+		}
+	}
+
+	// Pattern 2: @Name <email> or @email
+	const emailRe = /^\s*-\s+@[^<]*<([^>]+)>/gm;
+	let em: RegExpExecArray | null;
+	while ((em = emailRe.exec(joinersBlockText)) !== null) {
+		const email = em[1].trim().toLowerCase();
+		if (!seenEmails.has(email)) {
+			seenEmails.add(email);
+			result.push({ email: em[1].trim() });
+		}
+	}
+
+	// Pattern 3: bare @email (no angle brackets)
+	const bareEmailRe = /^\s*-\s+@([^\s<(\[]+)/gm;
+	let be: RegExpExecArray | null;
+	while ((be = bareEmailRe.exec(joinersBlockText)) !== null) {
+		const email = be[1].trim().toLowerCase();
+		// skip if already captured via wikilink sentinel or angle-bracket pattern
+		if (!seenEmails.has(email) && !seenEmails.has(`[[${be[1].trim()}]]`)) {
+			seenEmails.add(email);
+			result.push({ email: be[1].trim() });
+		}
+	}
+
+	return result;
 }
 
 /** Build the LINKS block (series page link + prev/next navigation). */
@@ -430,6 +505,7 @@ export interface FillTemplateOptions {
 	seriesPagePath?: string;
 	prevPath?: string;
 	nextPath?: string;
+	contactMap?: ContactMap;
 }
 
 /**
@@ -440,7 +516,7 @@ export function fillTemplateNormalized(
 	template: string,
 	opts: FillTemplateOptions,
 ): string {
-	const { event, settings, profile, seriesPagePath, prevPath, nextPath } = opts;
+	const { event, settings, profile, seriesPagePath, prevPath, nextPath, contactMap } = opts;
 
 	const tz         = event.timezone ?? settings.timezoneDefault ?? '';
 	const timeFormat = settings.timeFormat ?? 'HH:mm';
@@ -462,7 +538,7 @@ export function fillTemplateNormalized(
 
 	const seriesName   = profile?.seriesName ?? event.title;
 	const agendaBlock  = buildAgendaBlock(event, profile);
-	const joinersBlock = buildJoinersBlock(event, settings, profile);
+	const joinersBlock = buildJoinersBlock(event, settings, profile, contactMap);
 	const linksBlock   = buildLinksBlock({
 		event,
 		seriesPagePath,
@@ -470,7 +546,7 @@ export function fillTemplateNormalized(
 		nextPath,
 		cancelled: event.status === 'cancelled',
 	});
-	const frontmatter = buildFrontmatter(event, settings, profile);
+	const frontmatter = buildFrontmatter(event, settings, profile, contactMap);
 
 	const attendeesYaml = (event.attendees ?? [])
 		.map(a => `  - ${a.name ? `${a.name} <${a.email}>` : a.email}`)
