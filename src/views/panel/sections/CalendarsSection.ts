@@ -1,8 +1,13 @@
 /**
  * CalendarsSection — collapsible calendar list with checkboxes, color dots,
- * metadata rows, and refresh / select-all / select-none / search controls.
+ * metadata rows, refresh / select-all / select-none / search controls,
+ * and eye-icon hide/unhide with a "Hidden calendars (N)" collapsible section.
  *
  * Sort order: Primary → Owner → Writer → Reader → freeBusyReader
+ *
+ * Hide semantics: hiding a calendar deselects it (stops sync) AND removes it
+ * from the main list. Hidden calendars appear in a collapsible section below.
+ * Unhiding re-adds the calendar to the main list (does NOT auto-reselect it).
  */
 
 import { RichCalendarItem, GoogleApiSettings } from '../../../types';
@@ -31,6 +36,8 @@ export interface CalendarsSectionOptions {
 export class CalendarsSection {
 	private details: HTMLElement;
 	private listContainer!: HTMLElement;
+	private hiddenDetails!: HTMLElement;
+	private hiddenListContainer!: HTMLElement;
 	private searchInput!: HTMLInputElement;
 	private opts: CalendarsSectionOptions;
 	private calendars: RichCalendarItem[] = [];
@@ -56,6 +63,19 @@ export class CalendarsSection {
 
 	private selectedIds(): string[] {
 		return this.opts.gcalSettings.selectedCalendarIds ?? [];
+	}
+
+	private hiddenIds(): string[] {
+		return this.opts.gcalSettings.hiddenCalendarIds ?? [];
+	}
+
+	private async setHiddenIds(ids: string[]): Promise<void> {
+		this.opts.gcalSettings.hiddenCalendarIds = ids;
+		// Hidden calendars must not be in selectedCalendarIds
+		const hidden = new Set(ids);
+		const selected = this.selectedIds().filter(id => !hidden.has(id));
+		this.opts.gcalSettings.selectedCalendarIds = selected;
+		await this.opts.onSelectionChange(selected);
 	}
 
 	private buildSummary(): void {
@@ -89,7 +109,9 @@ export class CalendarsSection {
 
 	private updateSummaryCountEl(el: HTMLElement): void {
 		const sel = this.selectedIds();
-		el.setText(`${sel.length} / ${this.calendars.length} selected`);
+		const hidden = this.hiddenIds();
+		const visible = this.calendars.filter(c => !hidden.includes(c.id));
+		el.setText(`${sel.length} / ${visible.length} selected`);
 	}
 
 	private buildBody(): void {
@@ -144,91 +166,184 @@ export class CalendarsSection {
 			this.renderList();
 		});
 
-		// ── List ────────────────────────────────────────────────────────────────
+		// ── Main list ────────────────────────────────────────────────────────────
 		this.listContainer = body.createDiv({ cls: 'cb-calendars-list' });
+
+		// ── Hidden section ───────────────────────────────────────────────────────
+		this.hiddenDetails = body.createEl('details');
+		this.hiddenDetails.style.cssText = 'margin-top:8px;';
+
+		const hiddenSummary = this.hiddenDetails.createEl('summary');
+		hiddenSummary.style.cssText = [
+			'font-size:11px',
+			'color:var(--text-muted)',
+			'cursor:pointer',
+			'user-select:none',
+			'list-style:none',
+			'padding:2px 0',
+		].join(';');
+		hiddenSummary.setAttribute('data-cb-summary', 'calendars-hidden');
+
+		this.hiddenListContainer = this.hiddenDetails.createDiv();
+		this.hiddenListContainer.style.cssText = 'padding-top:4px;';
+
 		this.renderList();
+	}
+
+	private sortCalendars(cals: RichCalendarItem[]): RichCalendarItem[] {
+		return [...cals].sort((a, b) => {
+			if (a.primary && !b.primary) return -1;
+			if (!a.primary && b.primary) return 1;
+			const ra = ROLE_ORDER[a.accessRole ?? 'reader'] ?? 99;
+			const rb = ROLE_ORDER[b.accessRole ?? 'reader'] ?? 99;
+			if (ra !== rb) return ra - rb;
+			return a.name.localeCompare(b.name);
+		});
 	}
 
 	private renderList(): void {
 		this.listContainer.empty();
+		this.hiddenListContainer.empty();
 
-		const filtered = this.calendars
-			.filter(c => !this.searchQuery || c.name.toLowerCase().includes(this.searchQuery))
-			.sort((a, b) => {
-				// Primary first
-				if (a.primary && !b.primary) return -1;
-				if (!a.primary && b.primary) return 1;
-				const ra = ROLE_ORDER[a.accessRole ?? 'reader'] ?? 99;
-				const rb = ROLE_ORDER[b.accessRole ?? 'reader'] ?? 99;
-				if (ra !== rb) return ra - rb;
-				return a.name.localeCompare(b.name);
-			});
+		const hidden = new Set(this.hiddenIds());
 
-		if (filtered.length === 0) {
+		const visibleCals = this.sortCalendars(
+			this.calendars.filter(c =>
+				!hidden.has(c.id) &&
+				(!this.searchQuery || c.name.toLowerCase().includes(this.searchQuery))
+			)
+		);
+
+		const hiddenCals = this.sortCalendars(
+			this.calendars.filter(c => hidden.has(c.id))
+		);
+
+		// Update hidden summary label
+		const hiddenSummary = this.hiddenDetails.querySelector('summary') as HTMLElement | null;
+		if (hiddenSummary) {
+			hiddenSummary.setText(
+				hiddenCals.length === 0
+					? 'Hidden calendars'
+					: `Hidden calendars (${hiddenCals.length})`
+			);
+		}
+		(this.hiddenDetails as HTMLDetailsElement).style.display = hiddenCals.length === 0 ? 'none' : '';
+
+		// ── Render visible list ─────────────────────────────────────────────────
+		if (visibleCals.length === 0) {
 			const empty = this.listContainer.createDiv();
 			empty.style.cssText = 'font-size:11px;color:var(--text-faint);padding:4px 0;';
-			empty.setText(this.calendars.length === 0 ? 'No calendars. Click Refresh.' : 'No match.');
-			return;
+			empty.setText(
+				this.calendars.filter(c => !hidden.has(c.id)).length === 0
+					? 'No calendars. Click Refresh.'
+					: 'No match.'
+			);
+		} else {
+			const selected = new Set(this.selectedIds());
+			for (const cal of visibleCals) {
+				this.renderCalendarRow(this.listContainer, cal, selected, false);
+			}
 		}
 
-		const selected = new Set(this.selectedIds());
-
-		for (const cal of filtered) {
-			const row = this.listContainer.createDiv({ cls: 'cb-calendar-row' });
-			row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:5px 0;';
-
-			// Checkbox
-			const cb = row.createEl('input');
-			cb.type = 'checkbox';
-			cb.checked = selected.has(cal.id);
-			cb.style.cssText = 'flex-shrink:0;margin-top:2px;cursor:pointer;';
-			const isReadOnly = cal.accessRole === 'freeBusyReader';
-			if (isReadOnly) {
-				cb.disabled = true;
-				cb.title = 'Insufficient permission';
+		// ── Render hidden list ──────────────────────────────────────────────────
+		if (hiddenCals.length > 0) {
+			const selected = new Set(this.selectedIds());
+			for (const cal of hiddenCals) {
+				this.renderCalendarRow(this.hiddenListContainer, cal, selected, true);
 			}
+		}
 
-			// Color dot
-			const dot = row.createSpan();
-			dot.style.cssText = [
-				'width:10px',
-				'height:10px',
-				'border-radius:50%',
-				'flex-shrink:0',
-				'margin-top:3px',
-				`background:${cal.backgroundColor ?? 'var(--interactive-accent)'}`,
+		this.updateSummaryCount();
+	}
+
+	private renderCalendarRow(
+		container: HTMLElement,
+		cal: RichCalendarItem,
+		selected: Set<string>,
+		isHidden: boolean,
+	): void {
+		const row = container.createDiv({ cls: 'cb-calendar-row' });
+		row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:5px 0;';
+
+		// Checkbox (disabled for hidden rows — must unhide first)
+		const cb = row.createEl('input');
+		cb.type = 'checkbox';
+		cb.checked = selected.has(cal.id);
+		cb.style.cssText = 'flex-shrink:0;margin-top:2px;cursor:pointer;';
+		const isReadOnly = cal.accessRole === 'freeBusyReader';
+		if (isReadOnly || isHidden) {
+			cb.disabled = true;
+			cb.title = isReadOnly ? 'Insufficient permission' : 'Unhide to select';
+		}
+
+		// Color dot
+		const dot = row.createSpan();
+		dot.style.cssText = [
+			'width:10px',
+			'height:10px',
+			'border-radius:50%',
+			'flex-shrink:0',
+			'margin-top:3px',
+			`background:${cal.backgroundColor ?? 'var(--interactive-accent)'}`,
+		].join(';');
+
+		// Text block
+		const textBlock = row.createDiv();
+		textBlock.style.cssText = 'flex:1;min-width:0;';
+
+		const nameEl = textBlock.createDiv();
+		nameEl.style.cssText = 'font-size:12px;font-weight:600;color:var(--text-normal);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+		nameEl.setText(cal.name + (cal.primary ? ' ★' : ''));
+
+		const metaEl = textBlock.createDiv();
+		metaEl.style.cssText = 'display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:2px;';
+
+		if (cal.accessRole) {
+			const badge = metaEl.createSpan();
+			badge.style.cssText = [
+				'font-size:10px',
+				'padding:1px 4px',
+				'border-radius:3px',
+				'background:var(--background-secondary)',
+				'color:var(--text-muted)',
 			].join(';');
+			badge.setText(ROLE_LABELS[cal.accessRole] ?? cal.accessRole);
+		}
 
-			// Text block
-			const textBlock = row.createDiv();
-			textBlock.style.cssText = 'flex:1;min-width:0;';
+		if (cal.timeZone) {
+			const tz = metaEl.createSpan();
+			tz.style.cssText = 'font-size:10px;color:var(--text-faint);';
+			tz.setText(cal.timeZone);
+		}
 
-			const nameEl = textBlock.createDiv();
-			nameEl.style.cssText = 'font-size:12px;font-weight:600;color:var(--text-normal);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-			nameEl.setText(cal.name + (cal.primary ? ' ★' : ''));
-
-			const metaEl = textBlock.createDiv();
-			metaEl.style.cssText = 'display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:2px;';
-
-			if (cal.accessRole) {
-				const badge = metaEl.createSpan();
-				badge.style.cssText = [
-					'font-size:10px',
-					'padding:1px 4px',
-					'border-radius:3px',
-					'background:var(--background-secondary)',
-					'color:var(--text-muted)',
-				].join(';');
-				badge.setText(ROLE_LABELS[cal.accessRole] ?? cal.accessRole);
+		// Eye icon (hide / unhide)
+		const eyeBtn = row.createEl('button');
+		eyeBtn.style.cssText = [
+			'flex-shrink:0',
+			'background:none',
+			'border:none',
+			'cursor:pointer',
+			'padding:0 2px',
+			'font-size:14px',
+			'line-height:1',
+			'color:var(--text-muted)',
+			'opacity:0.7',
+		].join(';');
+		eyeBtn.setText(isHidden ? '🙈' : '👁');
+		eyeBtn.title = isHidden ? 'Unhide (re-add to list)' : 'Hide (remove from list and sync)';
+		eyeBtn.addEventListener('click', async () => {
+			const hidden = new Set(this.hiddenIds());
+			if (isHidden) {
+				hidden.delete(cal.id);
+			} else {
+				hidden.add(cal.id);
 			}
+			await this.setHiddenIds([...hidden]);
+			this.renderList();
+		});
 
-			if (cal.timeZone) {
-				const tz = metaEl.createSpan();
-				tz.style.cssText = 'font-size:10px;color:var(--text-faint);';
-				tz.setText(cal.timeZone);
-			}
-
-			// Toggle selection on checkbox change
+		// Toggle selection on checkbox change (only for visible, non-readonly rows)
+		if (!isHidden && !isReadOnly) {
 			cb.addEventListener('change', async () => {
 				const cur = new Set(this.selectedIds());
 				if (cb.checked) cur.add(cal.id);
@@ -241,7 +356,8 @@ export class CalendarsSection {
 	}
 
 	private async selectAll(): Promise<void> {
-		const ids = this.calendars.map(c => c.id);
+		const hidden = new Set(this.hiddenIds());
+		const ids = this.calendars.filter(c => !hidden.has(c.id)).map(c => c.id);
 		this.opts.gcalSettings.selectedCalendarIds = ids;
 		await this.opts.onSelectionChange(ids);
 		this.renderList();
