@@ -276,30 +276,30 @@ function startLoopbackServer(port: number): Promise<string> {
   </div>
 </body>
 </html>`);
-					server.close();
-
-					if (code) resolve(code);
-					else reject(new Error(error ?? 'OAuth cancelled or no code received.'));
-				} catch (e) {
-					reject(e as Error);
-				}
-			});
-
-			server.listen(port, '127.0.0.1');
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			server.on('error', (err: any) => reject(err as Error));
-
-			// 5-minute timeout
-			const timer = setTimeout(() => {
 				server.close();
-				reject(new Error('OAuth timed out after 5 minutes.'));
-			}, 5 * 60 * 1000);
 
-			// Allow Node process to exit even if timer is pending
-			if (timer.unref) timer.unref();
-		} catch (e) {
-			reject(e as Error);
-		}
+				if (code) resolve(code);
+				else reject(new Error(error ?? 'OAuth cancelled or no code received.'));
+			} catch (e) {
+				reject(e as Error);
+			}
+		});
+
+		server.listen(port, '127.0.0.1');
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		server.on('error', (err: any) => reject(err as Error));
+
+		// 5-minute timeout
+		const timer = setTimeout(() => {
+			server.close();
+			reject(new Error('OAuth timed out after 5 minutes.'));
+		}, 5 * 60 * 1000);
+
+		// Allow Node process to exit even if timer is pending
+		if (timer.unref) timer.unref();
+	} catch (e) {
+		reject(e as Error);
+	}
 	});
 }
 
@@ -343,11 +343,145 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	// ─── Field helpers ──────────────────────────────────────────────────────────
+
+	/**
+	 * Renders a numeric text input that clamps to [min, max] on blur.
+	 * The input is 80px wide for compactness.
+	 */
+	private addNumericSetting(
+		el: HTMLElement,
+		opts: {
+			name: string;
+			desc: string;
+			min: number;
+			max: number;
+			defaultVal: number;
+			get: () => number;
+			set: (v: number) => Promise<void>;
+		},
+	): void {
+		new Setting(el)
+			.setName(opts.name)
+			.setDesc(opts.desc)
+			.addText(t => {
+				t.inputEl.type = 'number';
+				t.inputEl.min = String(opts.min);
+				t.inputEl.max = String(opts.max);
+				t.inputEl.style.width = '80px';
+				t.setValue(String(opts.get()));
+				t.inputEl.addEventListener('blur', async () => {
+					let v = parseInt(t.inputEl.value, 10);
+					if (isNaN(v)) v = opts.defaultVal;
+					v = Math.max(opts.min, Math.min(opts.max, v));
+					t.setValue(String(v));
+					await opts.set(v);
+				});
+			});
+	}
+
+	/** Renders a text input with folder autocomplete. */
+	private addFolderSetting(
+		el: HTMLElement,
+		opts: {
+			name: string;
+			desc: string;
+			placeholder: string;
+			get: () => string;
+			set: (v: string) => Promise<void>;
+		},
+	): void {
+		new Setting(el)
+			.setName(opts.name)
+			.setDesc(opts.desc)
+			.addText(t => {
+				t.setPlaceholder(opts.placeholder).setValue(opts.get());
+				new FolderSuggest(this.app, t.inputEl);
+				t.onChange(async v => opts.set(v.trim() || opts.placeholder));
+			});
+	}
+
+	/** Renders a text input with file autocomplete. */
+	private addFileSetting(
+		el: HTMLElement,
+		opts: {
+			name: string;
+			desc: string;
+			placeholder: string;
+			get: () => string;
+			set: (v: string) => Promise<void>;
+		},
+	): void {
+		new Setting(el)
+			.setName(opts.name)
+			.setDesc(opts.desc)
+			.addText(t => {
+				t.setPlaceholder(opts.placeholder).setValue(opts.get());
+				new FileSuggest(this.app, t.inputEl);
+				t.onChange(async v => opts.set(v.trim()));
+			});
+	}
+
+	/** Renders a plain text input. */
+	private addTextSetting(
+		el: HTMLElement,
+		opts: {
+			name: string;
+			desc: string;
+			placeholder: string;
+			get: () => string;
+			set: (v: string) => Promise<void>;
+		},
+	): void {
+		new Setting(el)
+			.setName(opts.name)
+			.setDesc(opts.desc)
+			.addText(t =>
+				t
+					.setPlaceholder(opts.placeholder)
+					.setValue(opts.get())
+					.onChange(async v => opts.set(v.trim())),
+			);
+	}
+
+	/** Renders a toggle setting. */
+	private addToggleSetting(
+		el: HTMLElement,
+		opts: {
+			name: string;
+			desc: string;
+			get: () => boolean;
+			set: (v: boolean) => Promise<void>;
+		},
+	): void {
+		new Setting(el)
+			.setName(opts.name)
+			.setDesc(opts.desc)
+			.addToggle(t => t.setValue(opts.get()).onChange(opts.set));
+	}
+
+	/**
+	 * Creates a bordered card container for a calendar source.
+	 * All styling via CSS variables so it respects Obsidian themes.
+	 */
+	private makeCardEl(parent: HTMLElement): HTMLElement {
+		const card = parent.createDiv({ cls: 'calendar-bridge-source' });
+		card.style.cssText = [
+			'border: 1px solid var(--background-modifier-border)',
+			'border-radius: 8px',
+			'padding: 12px 16px',
+			'margin-bottom: 12px',
+		].join(';');
+		return card;
+	}
+
+	// ─── Top-level display ──────────────────────────────────────────────────────
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl('h2', { text: 'Calendar Bridge' });
+		new Setting(containerEl).setName('Calendar Bridge').setHeading();
 
 		this.renderSourcesSection(containerEl);
 		this.renderSyncSection(containerEl);
@@ -361,21 +495,17 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	// ─── Calendar Sources ──────────────────────────────────────────────────────
 
 	private renderSourcesSection(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName('Calendar Sources').setHeading();
-
-		containerEl.createEl('p', {
-			text: 'Add Google Calendar (OAuth) or ICS feed sources. Each source is synced independently.',
-			cls: 'setting-item-description',
-		});
+		new Setting(containerEl)
+			.setName('Calendar Sources')
+			.setHeading()
+			.setDesc('Add Google Calendar (OAuth) or ICS feed sources. Each source is synced independently.');
 
 		const sources = this.plugin.settings.sources;
 		sources.forEach((source, index) => {
 			this.renderSource(containerEl, source, index);
 		});
 
-		// Add source buttons
-		const addRow = new Setting(containerEl);
-		addRow
+		new Setting(containerEl)
 			.addButton(btn =>
 				btn
 					.setButtonText('＋ Add ICS feed')
@@ -401,11 +531,7 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 		source: CalendarSourceConfig,
 		index: number,
 	): void {
-		const wrapper = containerEl.createDiv({ cls: 'calendar-bridge-source' });
-		wrapper.style.border = '1px solid var(--background-modifier-border)';
-		wrapper.style.borderRadius = '6px';
-		wrapper.style.padding = '12px';
-		wrapper.style.marginBottom = '12px';
+		const card = this.makeCardEl(containerEl);
 
 		// Header row: enable toggle + type label + delete
 		const headerLabel =
@@ -415,7 +541,7 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					? '🔒 Private ICS'
 					: '📡 ICS Feed';
 
-		new Setting(wrapper)
+		new Setting(card)
 			.setName(`Source ${index + 1} — ${headerLabel}`)
 			.addToggle(t =>
 				t.setValue(source.enabled).onChange(async v => {
@@ -434,23 +560,22 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					}),
 			);
 
-		// Name
-		new Setting(wrapper)
-			.setName('Display name')
-			.addText(t =>
-				t
-					.setPlaceholder('My Calendar')
-					.setValue(source.name)
-					.onChange(async v => {
-						source.name = v;
-						await this.plugin.saveSettings();
-					}),
-			);
+		// Display name
+		this.addTextSetting(card, {
+			name: 'Display name',
+			desc: 'Human-readable label for this source.',
+			placeholder: 'My Calendar',
+			get: () => source.name,
+			set: async v => {
+				source.name = v;
+				await this.plugin.saveSettings();
+			},
+		});
 
-		// Source-type selector
-		new Setting(wrapper)
+		// Source type dropdown
+		new Setting(card)
 			.setName('Source type')
-			.setDesc('ICS Public: any public .ics URL. ICS Private: secret/sign URL. Google: OAuth 2.0.')
+			.setDesc('ICS Public: any public .ics URL. ICS Private: secret/signed URL. Google: OAuth 2.0.')
 			.addDropdown(d =>
 				d
 					.addOption('ics_public', 'ICS — Public feed')
@@ -473,37 +598,34 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 
 		// ICS-specific fields
 		if (source.sourceType === 'ics_public' || source.sourceType === 'ics_secret') {
-			this.renderIcsFields(wrapper, source);
+			this.renderIcsFields(card, source);
 		}
 
 		// Google-specific fields
 		if (source.sourceType === 'gcal_api') {
-			this.renderGoogleFields(wrapper, source);
+			this.renderGoogleFields(card, source);
 		}
 	}
 
-	private renderIcsFields(wrapper: HTMLElement, source: CalendarSourceConfig): void {
+	private renderIcsFields(card: HTMLElement, source: CalendarSourceConfig): void {
 		if (!source.ics) source.ics = defaultIcs();
 		const ics = source.ics;
 
-		new Setting(wrapper)
-			.setName('ICS URL')
-			.setDesc(
+		this.addTextSetting(card, {
+			name: 'ICS URL',
+			desc:
 				source.sourceType === 'ics_secret'
 					? '⚠ This URL acts as a password — treat it as a secret.'
 					: 'Public .ics feed URL (e.g. Google Calendar export URL).',
-			)
-			.addText(t =>
-				t
-					.setPlaceholder('https://…/basic.ics')
-					.setValue(ics.url)
-					.onChange(async v => {
-						ics.url = v.trim();
-						await this.plugin.saveSettings();
-					}),
-			);
+			placeholder: 'https://…/basic.ics',
+			get: () => ics.url,
+			set: async v => {
+				ics.url = v;
+				await this.plugin.saveSettings();
+			},
+		});
 
-		new Setting(wrapper)
+		new Setting(card)
 			.setName('Poll interval (minutes)')
 			.setDesc('How often to re-fetch this ICS feed during auto-sync. 0 = every sync.')
 			.addSlider(s =>
@@ -518,41 +640,39 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 			);
 	}
 
-	private renderGoogleFields(wrapper: HTMLElement, source: CalendarSourceConfig): void {
+	private renderGoogleFields(card: HTMLElement, source: CalendarSourceConfig): void {
 		if (!source.google) source.google = defaultGoogle();
 		const g = source.google;
 
 		if (!Platform.isDesktopApp) {
-			wrapper.createEl('p', {
+			card.createEl('p', {
 				text: '⚠ Google OAuth is available on desktop only. Use ICS export for mobile.',
 				cls: 'mod-warning',
 			});
 			return;
 		}
 
-		// ── Credentials file ────────────────────────────────────────────────────
-		new Setting(wrapper)
+		// ── Credentials sub-heading ──────────────────────────────────────────────
+		new Setting(card)
 			.setName('Google OAuth (Dev / Advanced)')
-			.setHeading();
-
-		wrapper.createEl('p', {
-			text:
+			.setHeading()
+			.setDesc(
 				'Download your OAuth credentials JSON from Google Cloud Console → APIs & Services → Credentials, ' +
 				'then load it below. No manual typing. Credentials are stored locally only.',
-			cls: 'setting-item-description',
-		});
+			);
 
-		// File picker + drag-drop zone
-		const dropZone = wrapper.createDiv({ cls: 'calendar-bridge-drop-zone' });
-		dropZone.style.cssText =
-			'border: 2px dashed var(--background-modifier-border);' +
-			'border-radius: 6px;' +
-			'padding: 16px 20px;' +
-			'text-align: center;' +
-			'margin: 8px 0 12px;' +
-			'cursor: pointer;' +
-			'transition: border-color 0.15s, background 0.15s;' +
-			'user-select: none;';
+		// ── Drag-drop zone ───────────────────────────────────────────────────────
+		const dropZone = card.createDiv({ cls: 'calendar-bridge-drop-zone' });
+		dropZone.style.cssText = [
+			'border: 2px dashed var(--background-modifier-border)',
+			'border-radius: 6px',
+			'padding: 16px 20px',
+			'text-align: center',
+			'margin: 8px 0 12px',
+			'cursor: pointer',
+			'transition: border-color 0.15s, background 0.15s',
+			'user-select: none',
+		].join(';');
 
 		const dropLabel = dropZone.createEl('p', {
 			text: g.googleCredsFileName
@@ -563,12 +683,11 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 		dropLabel.style.cssText = 'margin: 0; font-size: 13px;';
 
 		const hint = dropZone.createEl('p', {
-			text: g.googleCredsFileName ? '' : 'or click “Choose JSON file…” below',
+			text: g.googleCredsFileName ? '' : 'or click "Choose JSON file…" below',
 			cls: 'setting-item-description',
 		});
 		hint.style.cssText = 'margin: 4px 0 0; font-size: 12px; color: var(--text-faint);';
 
-		// Drag-over visual feedback
 		dropZone.addEventListener('dragover', (e: DragEvent) => {
 			e.preventDefault();
 			dropZone.style.borderColor = 'var(--interactive-accent)';
@@ -599,9 +718,9 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 			this.display();
 		});
 
-		// File picker button row
-		const pickerRow = new Setting(wrapper);
-		pickerRow
+		// ── File picker button ───────────────────────────────────────────────────
+		let authBtn: import('obsidian').ButtonComponent | undefined;
+		new Setting(card)
 			.addButton(btn =>
 				btn
 					.setButtonText('Choose JSON file…')
@@ -635,7 +754,7 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					}),
 			);
 
-		// ── Status fields ────────────────────────────────────────────────────────
+		// ── Loaded credentials status ────────────────────────────────────────────
 		if (g.googleCredsFileName) {
 			const typeLabel =
 				g.googleClientType === 'installed' ? 'installed (Desktop app)' :
@@ -643,7 +762,7 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 				'unknown';
 			const clientIdMasked = g.clientId ? maskClientId(g.clientId) : '—';
 
-			new Setting(wrapper)
+			new Setting(card)
 				.setName('Loaded credentials')
 				.setDesc(
 					`File: ${g.googleCredsFileName} · ` +
@@ -653,7 +772,7 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 				);
 		}
 
-		// ── Authorization status ────────────────────────────────────────────────
+		// ── Authorization status ─────────────────────────────────────────────────
 		const canAuth = !!g.clientId;
 		const authStatus = !canAuth
 			? '⚠ Load credentials above to enable authorization.'
@@ -665,8 +784,7 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					: '✓ Authorized')
 				: '✗ Not authorized';
 
-		let authBtn: import('obsidian').ButtonComponent | undefined;
-		const authSetting = new Setting(wrapper)
+		const authSetting = new Setting(card)
 			.setName('Authorization')
 			.setDesc(authStatus)
 			.addButton(btn => {
@@ -711,7 +829,7 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					}),
 			);
 
-		// Test Connection button
+		// ── Test Connection ──────────────────────────────────────────────────────
 		authSetting.addButton(btn =>
 			btn
 				.setButtonText('Test Connection')
@@ -736,8 +854,8 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 				}),
 		);
 
-		// Preview upcoming events button
-		new Setting(wrapper)
+		// ── Preview upcoming events ──────────────────────────────────────────────
+		new Setting(card)
 			.setName('Preview upcoming events')
 			.setDesc('Fetch and display the next 5 events from all selected calendars (requires authorization).')
 			.addButton(btn =>
@@ -781,15 +899,16 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(wrapper)
-			.setName('Include conference data')
-			.setDesc('Fetch Google Meet / Zoom join links from event conferenceData.')
-			.addToggle(t =>
-				t.setValue(g.includeConferenceData).onChange(async v => {
-					g.includeConferenceData = v;
-					await this.plugin.saveSettings();
-				}),
-			);
+		// ── Include conference data ──────────────────────────────────────────────
+		this.addToggleSetting(card, {
+			name: 'Include conference data',
+			desc: 'Fetch Google Meet / Zoom join links from event conferenceData.',
+			get: () => g.includeConferenceData,
+			set: async v => {
+				g.includeConferenceData = v;
+				await this.plugin.saveSettings();
+			},
+		});
 	}
 
 	/**
@@ -847,7 +966,6 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 			new Notice(`Calendar Bridge: Invalid credentials file — ${(err as Error).message}`);
 		}
 	}
-
 
 	/**
 	 * Starts an OAuth 2.0 PKCE authorization code flow using the system browser +
@@ -919,63 +1037,41 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	private renderSyncSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Sync').setHeading();
 
-		// Horizon days — numeric input + Default button
-		new Setting(containerEl)
-			.setName('Sync horizon (days)')
-			.setDesc('How many days ahead of today to fetch and generate notes.')
-			.addText(t => {
-				t.setValue(String(this.plugin.settings.horizonDays));
-				t.inputEl.type = 'number';
-				t.inputEl.min = '1';
-				t.inputEl.max = '60';
-				t.inputEl.style.width = '80px';
-				t.inputEl.addEventListener('blur', async () => {
-					let v = parseInt(t.inputEl.value, 10);
-					if (isNaN(v)) v = 5;
-					v = Math.max(1, Math.min(60, v));
-					t.setValue(String(v));
-					this.plugin.settings.horizonDays = v;
-					await this.plugin.saveSettings();
-				});
-			})
-			.addButton(btn =>
-				btn.setButtonText('Default (5)').onClick(async () => {
-					this.plugin.settings.horizonDays = 5;
-					await this.plugin.saveSettings();
-					new Notice('Calendar Bridge: Sync horizon reset to 5 days.');
-					this.display();
-				}),
-			);
+		this.addNumericSetting(containerEl, {
+			name: 'Sync horizon (days)',
+			desc: 'How many days ahead of today to fetch and generate notes.',
+			min: 1,
+			max: 60,
+			defaultVal: 5,
+			get: () => this.plugin.settings.horizonDays,
+			set: async v => {
+				this.plugin.settings.horizonDays = v;
+				await this.plugin.saveSettings();
+			},
+		});
 
-		// Auto-sync interval — numeric input
-		new Setting(containerEl)
-			.setName('Auto-sync interval (minutes)')
-			.setDesc('How often to automatically sync in the background. 0 = disabled.')
-			.addText(t => {
-				t.setValue(String(this.plugin.settings.autoSyncIntervalMinutes));
-				t.inputEl.type = 'number';
-				t.inputEl.min = '0';
-				t.inputEl.max = '1440';
-				t.inputEl.style.width = '80px';
-				t.inputEl.addEventListener('blur', async () => {
-					let v = parseInt(t.inputEl.value, 10);
-					if (isNaN(v)) v = 0;
-					v = Math.max(0, Math.min(1440, v));
-					t.setValue(String(v));
-					this.plugin.settings.autoSyncIntervalMinutes = v;
-					await this.plugin.saveSettings();
-				});
-			});
+		this.addNumericSetting(containerEl, {
+			name: 'Auto-sync interval (minutes)',
+			desc: 'How often to automatically sync in the background. 0 = disabled.',
+			min: 0,
+			max: 1440,
+			defaultVal: 60,
+			get: () => this.plugin.settings.autoSyncIntervalMinutes,
+			set: async v => {
+				this.plugin.settings.autoSyncIntervalMinutes = v;
+				await this.plugin.saveSettings();
+			},
+		});
 
-		new Setting(containerEl)
-			.setName('Sync on startup')
-			.setDesc('Automatically run a sync when Obsidian opens.')
-			.addToggle(t =>
-				t.setValue(this.plugin.settings.syncOnStartup).onChange(async v => {
-					this.plugin.settings.syncOnStartup = v;
-					await this.plugin.saveSettings();
-				}),
-			);
+		this.addToggleSetting(containerEl, {
+			name: 'Sync on startup',
+			desc: 'Automatically run a sync when Obsidian opens.',
+			get: () => this.plugin.settings.syncOnStartup,
+			set: async v => {
+				this.plugin.settings.syncOnStartup = v;
+				await this.plugin.saveSettings();
+			},
+		});
 	}
 
 	// ─── Paths ─────────────────────────────────────────────────────────────────
@@ -983,47 +1079,38 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	private renderPathsSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Paths').setHeading();
 
-		// Meetings root — folder suggest
-		const meetingsSetting = new Setting(containerEl)
-			.setName('Meetings root folder')
-			.setDesc('Vault folder where individual meeting notes are created (date sub-folders are created automatically).')
-			.addText(t => {
-				t.setPlaceholder('Meetings').setValue(this.plugin.settings.meetingsRoot);
-				new FolderSuggest(this.app, t.inputEl);
-				t.onChange(async v => {
-					this.plugin.settings.meetingsRoot = v.trim() || 'Meetings';
-					await this.plugin.saveSettings();
-				});
-			});
-		meetingsSetting.controlEl.addClass('calendar-bridge-path-setting');
+		this.addFolderSetting(containerEl, {
+			name: 'Meetings root folder',
+			desc: 'Vault folder where individual meeting notes are created (date sub-folders are created automatically).',
+			placeholder: 'Meetings',
+			get: () => this.plugin.settings.meetingsRoot,
+			set: async v => {
+				this.plugin.settings.meetingsRoot = v;
+				await this.plugin.saveSettings();
+			},
+		});
 
-		// Series root — folder suggest
-		const seriesSetting = new Setting(containerEl)
-			.setName('Series root folder')
-			.setDesc('Vault folder where recurring-series index pages are created.')
-			.addText(t => {
-				t.setPlaceholder('Meetings/_series').setValue(this.plugin.settings.seriesRoot);
-				new FolderSuggest(this.app, t.inputEl);
-				t.onChange(async v => {
-					this.plugin.settings.seriesRoot = v.trim() || 'Meetings/_series';
-					await this.plugin.saveSettings();
-				});
-			});
-		seriesSetting.controlEl.addClass('calendar-bridge-path-setting');
+		this.addFolderSetting(containerEl, {
+			name: 'Series root folder',
+			desc: 'Vault folder where recurring-series index pages are created.',
+			placeholder: 'Meetings/_series',
+			get: () => this.plugin.settings.seriesRoot,
+			set: async v => {
+				this.plugin.settings.seriesRoot = v;
+				await this.plugin.saveSettings();
+			},
+		});
 
-		// Template path — file suggest
-		const templateSetting = new Setting(containerEl)
-			.setName('Template note path')
-			.setDesc('Vault path to a custom note template. Leave blank to use the built-in template.')
-			.addText(t => {
-				t.setPlaceholder('Templates/Meeting.md').setValue(this.plugin.settings.templatePath);
-				new FileSuggest(this.app, t.inputEl);
-				t.onChange(async v => {
-					this.plugin.settings.templatePath = v.trim();
-					await this.plugin.saveSettings();
-				});
-			});
-		templateSetting.controlEl.addClass('calendar-bridge-path-setting');
+		this.addFileSetting(containerEl, {
+			name: 'Template note path',
+			desc: 'Vault path to a custom note template. Leave blank to use the built-in template.',
+			placeholder: 'Templates/Meeting.md',
+			get: () => this.plugin.settings.templatePath,
+			set: async v => {
+				this.plugin.settings.templatePath = v;
+				await this.plugin.saveSettings();
+			},
+		});
 	}
 
 	// ─── Format ────────────────────────────────────────────────────────────────
@@ -1031,70 +1118,49 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	private renderFormatSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Format').setHeading();
 
-		new Setting(containerEl)
-			.setName('Date folder format')
-			.setDesc('Sub-folder name inside the meetings root. Tokens: YYYY, MM, DD.')
-			.addText(t =>
-				t
-					.setPlaceholder('YYYY-MM-DD')
-					.setValue(this.plugin.settings.dateFolderFormat)
-					.onChange(async v => {
-						this.plugin.settings.dateFolderFormat = v.trim() || 'YYYY-MM-DD';
-						await this.plugin.saveSettings();
-					}),
-			);
+		this.addTextSetting(containerEl, {
+			name: 'Date folder format',
+			desc: 'Sub-folder name inside the meetings root. Tokens: YYYY, MM, DD.',
+			placeholder: 'YYYY-MM-DD',
+			get: () => this.plugin.settings.dateFolderFormat,
+			set: async v => {
+				this.plugin.settings.dateFolderFormat = v || 'YYYY-MM-DD';
+				await this.plugin.saveSettings();
+			},
+		});
 
-		new Setting(containerEl)
-			.setName('File name format')
-			.setDesc('Template for the note file name. Tokens: {time}, {series}, {title}.')
-			.addText(t =>
-				t
-					.setPlaceholder('{time} [{series}] {title}')
-					.setValue(this.plugin.settings.fileNameFormat)
-					.onChange(async v => {
-						this.plugin.settings.fileNameFormat = v.trim() || '{time} [{series}] {title}';
-						await this.plugin.saveSettings();
-					}),
-			);
+		this.addTextSetting(containerEl, {
+			name: 'Date format',
+			desc: 'Displayed inside note content. Tokens: YYYY, MM, DD.',
+			placeholder: 'YYYY-MM-DD',
+			get: () => this.plugin.settings.dateFormat,
+			set: async v => {
+				this.plugin.settings.dateFormat = v || 'YYYY-MM-DD';
+				await this.plugin.saveSettings();
+			},
+		});
 
-		new Setting(containerEl)
-			.setName('Date format')
-			.setDesc('Displayed inside note content. Tokens: YYYY, MM, DD.')
-			.addText(t =>
-				t
-					.setPlaceholder('YYYY-MM-DD')
-					.setValue(this.plugin.settings.dateFormat)
-					.onChange(async v => {
-						this.plugin.settings.dateFormat = v.trim() || 'YYYY-MM-DD';
-						await this.plugin.saveSettings();
-					}),
-			);
+		this.addTextSetting(containerEl, {
+			name: 'Time format',
+			desc: 'Displayed inside note content. Tokens: HH (24-hour), mm.',
+			placeholder: 'HH:mm',
+			get: () => this.plugin.settings.timeFormat,
+			set: async v => {
+				this.plugin.settings.timeFormat = v || 'HH:mm';
+				await this.plugin.saveSettings();
+			},
+		});
 
-		new Setting(containerEl)
-			.setName('Time format')
-			.setDesc('Displayed inside note content. Tokens: HH (24-hour), mm.')
-			.addText(t =>
-				t
-					.setPlaceholder('HH:mm')
-					.setValue(this.plugin.settings.timeFormat)
-					.onChange(async v => {
-						this.plugin.settings.timeFormat = v.trim() || 'HH:mm';
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName('Default timezone')
-			.setDesc('IANA timezone for events without explicit TZ (e.g. America/New_York). Leave blank to use system timezone.')
-			.addText(t =>
-				t
-					.setPlaceholder('America/New_York')
-					.setValue(this.plugin.settings.timezoneDefault)
-					.onChange(async v => {
-						this.plugin.settings.timezoneDefault = v.trim();
-						await this.plugin.saveSettings();
-					}),
-			);
+		this.addTextSetting(containerEl, {
+			name: 'Default timezone',
+			desc: 'IANA timezone for events without explicit TZ (e.g. America/New_York). Leave blank to use system timezone.',
+			placeholder: 'America/New_York',
+			get: () => this.plugin.settings.timezoneDefault,
+			set: async v => {
+				this.plugin.settings.timezoneDefault = v;
+				await this.plugin.saveSettings();
+			},
+		});
 	}
 
 	// ─── Features ──────────────────────────────────────────────────────────────
@@ -1102,25 +1168,25 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	private renderFeaturesSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Features').setHeading();
 
-		new Setting(containerEl)
-			.setName('Generate series pages')
-			.setDesc('Create and maintain an index page for each recurring meeting series.')
-			.addToggle(t =>
-				t.setValue(this.plugin.settings.enableSeriesPages).onChange(async v => {
-					this.plugin.settings.enableSeriesPages = v;
-					await this.plugin.saveSettings();
-				}),
-			);
+		this.addToggleSetting(containerEl, {
+			name: 'Generate series pages',
+			desc: 'Create and maintain an index page for each recurring meeting series.',
+			get: () => this.plugin.settings.enableSeriesPages,
+			set: async v => {
+				this.plugin.settings.enableSeriesPages = v;
+				await this.plugin.saveSettings();
+			},
+		});
 
-		new Setting(containerEl)
-			.setName('Add prev / next links')
-			.setDesc('Insert previous and next occurrence links in each meeting note.')
-			.addToggle(t =>
-				t.setValue(this.plugin.settings.enablePrevNextLinks).onChange(async v => {
-					this.plugin.settings.enablePrevNextLinks = v;
-					await this.plugin.saveSettings();
-				}),
-			);
+		this.addToggleSetting(containerEl, {
+			name: 'Add prev / next links',
+			desc: 'Insert previous and next occurrence links in each meeting note.',
+			get: () => this.plugin.settings.enablePrevNextLinks,
+			set: async v => {
+				this.plugin.settings.enablePrevNextLinks = v;
+				await this.plugin.saveSettings();
+			},
+		});
 	}
 
 	// ─── Privacy ───────────────────────────────────────────────────────────────
@@ -1128,25 +1194,23 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	private renderPrivacySection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Privacy').setHeading();
 
-		new Setting(containerEl)
-			.setName('Redaction mode')
-			.setDesc(
+		this.addToggleSetting(containerEl, {
+			name: 'Redaction mode',
+			desc:
 				'When enabled, attendee email addresses and conference join links are NOT written to notes. ' +
 				'Useful when vault is synced to a shared location.',
-			)
-			.addToggle(t =>
-				t.setValue(this.plugin.settings.redactionMode).onChange(async v => {
-					this.plugin.settings.redactionMode = v;
-					await this.plugin.saveSettings();
-				}),
-			);
+			get: () => this.plugin.settings.redactionMode,
+			set: async v => {
+				this.plugin.settings.redactionMode = v;
+				await this.plugin.saveSettings();
+			},
+		});
 
-		containerEl.createEl('p', {
-			text:
+		new Setting(containerEl)
+			.setDesc(
 				'⚠ OAuth tokens and secret ICS URLs are stored in plain text in your Obsidian data directory. ' +
 				'Do not sync your vault to untrusted locations when using these features.',
-			cls: 'setting-item-description',
-		});
+			);
 	}
 
 	// ─── Actions ───────────────────────────────────────────────────────────────
