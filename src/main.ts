@@ -16,6 +16,7 @@ import { Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
 import { DEFAULT_SETTINGS, PluginSettings, SubscriptionsState, SyncStage } from './types';
 import { CalendarBridgeSettingsTab } from './settings';
 import { runSync, SyncResult } from './sync-manager';
+import { sanitizeFilename } from './note-generator';
 import { SeriesModal, SeriesModalPlugin } from './modals/series-modal';
 import { PreviewModal, PreviewModalPlugin, SyncPlan, SyncPlanItem } from './modals/preview-modal';
 import {
@@ -427,31 +428,44 @@ private async computeSyncPlan(): Promise<SyncPlan> {
 	 * Opens the series index page linked from the current meeting note.
 	 * Looks for a `series_key` in the file's frontmatter.
 	 */
-	private async openSeriesPageForNote(file: TFile): Promise<void> {
+private async openSeriesPageForNote(file: TFile): Promise<void> {
 		const cache = this.app.metadataCache.getFileCache(file);
-		const seriesKey = cache?.frontmatter?.['series_key'] as string | undefined;
+		const seriesKey  = cache?.frontmatter?.['series_key']  as string | undefined;
+		const seriesName = cache?.frontmatter?.['series_name'] as string | undefined;
 
-		if (!seriesKey) {
+		if (!seriesKey && !seriesName) {
 			new Notice('Calendar Bridge: No series_key found in the current note\'s frontmatter.');
 			return;
 		}
 
-		// Find the series page file
 		const seriesRoot = this.settings.seriesRoot;
-		const slug = seriesKey
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, '-')
-			.replace(/^-+|-+$/g, '');
-		const seriesPath = `${seriesRoot}/${slug}.md`;
 
-		const seriesFile = this.app.vault.getAbstractFileByPath(seriesPath);
-		if (!seriesFile || !(seriesFile instanceof TFile)) {
-			new Notice(`Calendar Bridge: Series page not found at "${seriesPath}". Run a sync first.`);
-			return;
+		// Primary lookup: use series_name with same sanitization used at creation time
+		if (seriesName) {
+			const seriesPath = `${seriesRoot}/${sanitizeFilename(seriesName)}.md`;
+			const seriesFile = this.app.vault.getAbstractFileByPath(seriesPath);
+			if (seriesFile instanceof TFile) {
+				const leaf = this.app.workspace.getLeaf(false) as WorkspaceLeaf;
+				await leaf.openFile(seriesFile);
+				return;
+			}
 		}
 
-		const leaf = this.app.workspace.getLeaf(false) as WorkspaceLeaf;
-		await leaf.openFile(seriesFile);
+		// Fallback: scan series folder for a file whose series_key frontmatter matches
+		// (handles old/slugified series pages created before this fix)
+		if (seriesKey) {
+			const files = this.app.vault.getFiles().filter(f => f.path.startsWith(seriesRoot + '/'));
+			for (const f of files) {
+				const fc = this.app.metadataCache.getFileCache(f);
+				if (fc?.frontmatter?.['series_key'] === seriesKey) {
+					const leaf = this.app.workspace.getLeaf(false) as WorkspaceLeaf;
+					await leaf.openFile(f);
+					return;
+				}
+			}
+		}
+
+		new Notice('Calendar Bridge: Series page not found. Run a sync first.');
 	}
 
 	// ── Manual event picker ─────────────────────────────────────────────────────

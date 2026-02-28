@@ -12,6 +12,7 @@ import {
 	SeriesInfo,
 	SeriesInfoNormalized,
 } from '../src/series-manager';
+import { sanitizeFilename } from '../src/note-generator';
 import { CalendarEvent, NormalizedEvent, SeriesProfile } from '../src/types';
 import { AUTOGEN_START, AUTOGEN_END } from '../src/note-generator';
 
@@ -88,6 +89,27 @@ describe('getSeriesPath', () => {
 		expect(path).not.toContain('/B');
 		expect(path).not.toContain('?');
 		expect(path).not.toContain(':');
+	});
+});
+
+// ─── Navigation path consistency ────────────────────────────────────────────
+
+describe('series navigation — creation and navigation paths must match', () => {
+	it('sanitizeFilename(seriesName) matches the filename used by getSeriesPath', () => {
+		// This verifies that openSeriesPageForNote (navigation) computes the same
+		// path as getSeriesPath (creation). If these diverge, navigation breaks.
+		const titles = [
+			'Team Standup',
+			'A/B: Review?',
+			'Weekly 1:1 — Engineering',
+			'gcal:abc123',          // edge case: key-like title
+		];
+		const seriesFolder = 'Meetings/Series';
+		for (const title of titles) {
+			const creationPath = getSeriesPath(title, { seriesFolder });
+			const navPath = `${seriesFolder}/${sanitizeFilename(title)}.md`;
+			expect(navPath).toBe(creationPath);
+		}
 	});
 });
 
