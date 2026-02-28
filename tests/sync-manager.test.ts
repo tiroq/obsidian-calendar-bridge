@@ -827,3 +827,100 @@ describe('runSync — diagnostic counts', () => {
 		expect(result.eventsEligible).toBe(result.eventsFetched);
 	});
 });
+
+// ─── Series page filename — gcal recurring event ───────────────────────────
+
+describe('runSync — series page filename for gcal recurring events', () => {
+	beforeEach(() => { jest.clearAllMocks(); });
+
+	it('series page filename uses event title only (no gcal: ID)', async () => {
+		// Simulates a real Google Calendar recurring event:
+		//   recurringEventId: 'base_event_id' → seriesKey = 'gcal:base_event_id'
+		//   iCalUID: 'base_event_id@google.com'
+		//   summary: 'Team Standup' (the human title)
+		mockGcalEventsResponse([makeGcalRawEvent({
+			id: 'base_event_id_20260228T100000Z',
+			iCalUID: 'base_event_id@google.com',
+			recurringEventId: 'base_event_id',
+			summary: 'Team Standup',
+		})]);
+		const app = new App();
+		const settings: SyncSettings = {
+			...DEFAULT_SETTINGS,
+			notesFolder: 'Meetings',
+			seriesFolder: 'Meetings/Series',
+			syncHorizonDays: 14,
+			sources: [makeGcalSource()],
+		};
+		await runSync(app as never, settings as never, async () => '', NOW);
+		const seriesFiles = (app.vault as Vault).listFiles().filter(f => f.startsWith('Meetings/Series/'));
+		expect(seriesFiles).toHaveLength(1);
+		// Filename must contain the human title, not the gcal ID
+		expect(seriesFiles[0]).toContain('Team Standup');
+		// Filename must NOT contain the gcal series key ('base_event_id' or 'gcal')
+		expect(seriesFiles[0]).not.toMatch(/base_event_id/);
+		expect(seriesFiles[0]).not.toMatch(/gcal/i);
+	});
+	it('meeting note filename uses event title only (no gcal: ID or recurringEventId)', async () => {
+		mockGcalEventsResponse([makeGcalRawEvent({
+			id: 'base_event_id_20260228T100000Z',
+			iCalUID: 'base_event_id@google.com',
+			recurringEventId: 'base_event_id',
+			summary: 'Team Standup',
+		})]);
+		const app = new App();
+		const settings: SyncSettings = {
+			...DEFAULT_SETTINGS,
+			notesFolder: 'Meetings',
+			seriesFolder: 'Meetings/Series',
+			syncHorizonDays: 14,
+			sources: [makeGcalSource()],
+		};
+		await runSync(app as never, settings as never, async () => '', NOW);
+		const noteFiles = (app.vault as Vault).listFiles().filter(
+			f => f.startsWith('Meetings/') && !f.startsWith('Meetings/Series/'),
+		);
+		expect(noteFiles).toHaveLength(1);
+		expect(noteFiles[0]).toContain('Team Standup');
+		expect(noteFiles[0]).not.toMatch(/base_event_id/);
+		expect(noteFiles[0]).not.toMatch(/gcal/i);
+	});
+	it('series page filename is clean with multiple occurrences of the same recurring event', async () => {
+		// All instances of a recurring event share iCalUID — groupBySeries must group them together
+		// and the series page filename must be the human-readable title, not the recurring ID
+		mockGcalEventsResponse([
+			makeGcalRawEvent({
+				id: 'base_event_id_20260228T100000Z',
+				iCalUID: 'base_event_id@google.com',
+				recurringEventId: 'base_event_id',
+				summary: 'Team Standup',
+				start: { dateTime: '2024-01-15T09:00:00Z' },
+				end:   { dateTime: '2024-01-15T09:15:00Z' },
+			}),
+			makeGcalRawEvent({
+				id: 'base_event_id_20260301T100000Z',
+				iCalUID: 'base_event_id@google.com',
+				recurringEventId: 'base_event_id',
+				summary: 'Team Standup',
+				start: { dateTime: '2024-01-16T09:00:00Z' },
+				end:   { dateTime: '2024-01-16T09:15:00Z' },
+			}),
+		]);
+		const app = new App();
+		const settings: SyncSettings = {
+			...DEFAULT_SETTINGS,
+			notesFolder: 'Meetings',
+			seriesFolder: 'Meetings/Series',
+			syncHorizonDays: 14,
+			sources: [makeGcalSource()],
+		};
+		await runSync(app as never, settings as never, async () => '', NOW);
+		const seriesFiles = (app.vault as Vault).listFiles().filter(f => f.startsWith('Meetings/Series/'));
+		// Exactly one series page for the recurring series
+		expect(seriesFiles).toHaveLength(1);
+		expect(seriesFiles[0]).toContain('Team Standup');
+		expect(seriesFiles[0]).not.toMatch(/base_event_id/);
+		expect(seriesFiles[0]).not.toMatch(/gcal/i);
+	});
+});
+
