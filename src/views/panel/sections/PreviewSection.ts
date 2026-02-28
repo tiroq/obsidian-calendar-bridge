@@ -163,12 +163,14 @@ export class PreviewSection {
 		try {
 		const allFetched = await this.opts.fetchEvents();
 		this._allFetched = allFetched;
+		console.log(`[CalendarBridge] PREVIEW_FETCH — fetched ${allFetched.length} events, now=${new Date().toISOString()}`);
+		allFetched.forEach(e => console.log(`[CalendarBridge]   event: "${e.title}" start=${e.startDate?.toISOString()} future=${e.startDate >= new Date()}`));
 		// Sort by start ascending, take first 5 for display
 		this.events = allFetched
 			.filter(e => e.startDate >= new Date())
 			.sort((a, b) => a.startDate.getTime() - b.startDate.getTime())
 			.slice(0, 5);
-
+		console.log(`[CalendarBridge] PREVIEW_FILTERED — showing ${this.events.length} upcoming events`);
 		} catch (err) {
 			this.listContainer.empty();
 			const errEl = this.listContainer.createDiv();

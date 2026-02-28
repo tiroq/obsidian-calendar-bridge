@@ -363,6 +363,7 @@ export async function runSync(
 	for (const event of filteredEvents) {
 		try {
 			const notePath = getNotePath(event, pathSettings);
+			console.log(`[CalendarBridge] NOTE_PATH — "${event.title}" → ${notePath}`);
 			const seriesPagePath = event.isRecurring
 				? (() => {
 					const sp = getSeriesPath(event.title, { ...settings, seriesFolder });
