@@ -20,6 +20,7 @@ function makeEvent(overrides: Partial<NormalizedEvent> = {}): NormalizedEvent {
 		eventId:    'ev1',
 		uid:        'uid1',
 		calendarId: 'cal1',
+		source:     'gcal_api',
 		title:      'Team Standup',
 		start:      '2026-03-01T10:00:00+07:00',
 		end:        '2026-03-01T10:15:00+07:00',
