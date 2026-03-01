@@ -8,6 +8,15 @@
  *     …content…
  *     <!-- CB:END CB_CONTEXT -->
  *
+ * CB_FM is special: it maps to Obsidian YAML frontmatter and must always
+ * appear at the very top of the file.  It is NOT wrapped in HTML comment
+ * markers.  Instead it is rendered as:
+ *     ---
+ *     <yaml lines>
+ *     ---
+ * Idempotency for CB_FM is achieved by detecting and replacing the
+ * frontmatter block at the top of the file (^---\n[\s\S]*?\n---\n?).
+ *
  * On subsequent syncs the markers are found and content is replaced
  * without touching anything outside the markers (user's zone).
  *
@@ -41,8 +50,17 @@ export function cbEnd(slot: CbSlot): string {
 	return `<!-- CB:END ${slot} -->`;
 }
 
-/** Build the full wrapped block string for a slot. */
+/**
+ * Build the full wrapped block string for a slot.
+ *
+ * CB_FM is special: no HTML markers — rendered as a YAML frontmatter fence.
+ * All other slots: wrapped with <!-- CB:BEGIN/END --> markers.
+ */
 export function wrapSlot(slot: CbSlot, content: string): string {
+	if (slot === 'CB_FM') {
+		// Frontmatter must be a pure YAML fence — no HTML markers.
+		return `---\n${content.trim()}\n---`;
+	}
 	return `${cbBegin(slot)}\n${content}\n${cbEnd(slot)}`;
 }
 
@@ -109,6 +127,24 @@ export function injectBlocks(
 		if (body === undefined) continue;
 
 		const wrapped = wrapSlot(slot, body);
+
+		if (slot === 'CB_FM') {
+			// CB_FM is frontmatter — no HTML markers.
+			// Mode 1: template token {{CB_FM}} → replace with fenced YAML.
+			// Mode 2: existing frontmatter at top → replace it in-place.
+			const fmTokenPattern = new RegExp(`\\{\\{${slot}\\}\\}`, 'g');
+			if (fmTokenPattern.test(result)) {
+				// Replace token — ensure frontmatter ends up at top
+				result = result.replace(new RegExp(`\\{\\{${slot}\\}\\}`, 'g'), wrapped);
+			} else if (cbFmRe.test(result)) {
+				// Replace existing YAML frontmatter block
+				result = result.replace(cbFmRe, wrapped + '\n');
+			}
+			// Ensure frontmatter is always at the very top
+			result = hoistFrontmatter(result);
+			continue;
+		}
+
 		const tokenPattern = new RegExp(`\\{\\{${slot}\\}\\}`, 'g');
 		const blockRe = cbBlockRe(slot);
 
@@ -130,11 +166,29 @@ export function injectBlocks(
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
+/** Regex matching the YAML frontmatter block at the top of a file. */
+const cbFmRe = /^---\n[\s\S]*?\n---\n?/;
+
 function cbBlockRe(slot: CbSlot): RegExp {
 	return new RegExp(
 		`<!--\\s*CB:BEGIN\\s+${slot}\\s*-->[\\s\\S]*?<!--\\s*CB:END\\s+${slot}\\s*-->`,
 		'g',
 	);
+}
+
+/**
+ * If a `---...---` frontmatter block exists but is not at position 0,
+ * move it to the top.  Handles the edge case where a template has text
+ * before {{CB_FM}} (which would be unusual but shouldn't crash).
+ */
+function hoistFrontmatter(content: string): string {
+	// Already at top — most common case, fast exit
+	if (content.startsWith('---\n')) return content;
+	const match = content.match(/---\n[\s\S]*?\n---\n?/);
+	if (!match || match.index === undefined) return content;
+	const fm = match[0].endsWith('\n') ? match[0] : match[0] + '\n';
+	const rest = content.slice(0, match.index) + content.slice(match.index + match[0].length);
+	return fm + rest.replace(/^\n+/, '');
 }
 
 // ─── Extraction ───────────────────────────────────────────────────────────
