@@ -18,6 +18,7 @@ import { resolveTemplatePath } from './services/TemplateRoutingService';
 import { ContextService } from './services/ContextService';
 import { ActionAggregationService } from './services/ActionAggregationService';
 import { MetricsService } from './services/MetricsService';
+import { buildCbBlocks } from './services/CbBlocksBuilder';
 import { NormalizedEvent, PluginSettings, SyncStage } from './types';
 import { parseAndFilterEvents } from './ics-parser';
 import { GoogleCalendarAdapter } from './sources/gcal-source';
@@ -447,25 +448,18 @@ export async function runSync(
 
 
 			// ── Build CB slot content from premium services (series-scoped, cached) ──
-			const cbBlocks: Partial<Record<CbSlot, string>> = {};
-			if (event.seriesKey && event.isRecurring) {
-				try {
-					const ctxResult = await contextService.buildContext({
-						seriesKey: event.seriesKey,
-						notesFolder,
-						maxLookback: 3,
-					});
-					if (ctxResult.content) cbBlocks['CB_CONTEXT'] = ctxResult.content;
-				} catch { /* non-fatal — premium feature degraded silently */ }
-				try {
-					const actResult = await actionService.aggregateActions({
-						seriesKey: event.seriesKey,
-						notesFolder,
-						maxLookback: 5,
-					});
-					if (actResult.content) cbBlocks['CB_ACTIONS'] = actResult.content;
-				} catch { /* non-fatal — premium feature degraded silently */ }
-			}
+			const cbBlocks = await buildCbBlocks({
+				app,
+				event,
+				settings: { ...settings, meetingsRoot: notesFolder, seriesRoot: seriesFolder } as PluginSettings,
+				notesFolder,
+				seriesFolder,
+				seriesPagePath,
+				contactMap,
+				contextService,
+				actionService,
+				debugEnabled: false,
+			});
 
 			const existing = app.vault.getAbstractFileByPath(notePath);
 			if (existing instanceof TFile) {
@@ -499,7 +493,11 @@ export async function runSync(
 
 
 				// Apply CB slot injection with premium content (idempotent)
-				updated = injectBlocks(updated, cbBlocks);
+				updated = injectBlocks(updated, cbBlocks, { debugEnabled: false });
+				const updatedLeftovers = updated.match(/\{\{CB_[A-Z_]+\}\}/g);
+				if (updatedLeftovers?.length) {
+					throw new Error(`CB slots not processed: ${updatedLeftovers.join(', ')}`);
+				}
 				if (updated !== existingContent) {
 					console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → UPDATE ${notePath} (AUTOGEN changed)`);
 					await app.vault.modify(existing, updated);
@@ -517,7 +515,11 @@ export async function runSync(
 				}
 				console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → CREATE ${notePath}`);
 				// Apply CB slot injection to new note with premium content
-				const contentWithCb = injectBlocks(newContent, cbBlocks);
+				const contentWithCb = injectBlocks(newContent, cbBlocks, { debugEnabled: false });
+				const leftovers = contentWithCb.match(/\{\{CB_[A-Z_]+\}\}/g);
+				if (leftovers?.length) {
+					throw new Error(`CB slots not processed: ${leftovers.join(', ')}`);
+				}
 				await app.vault.create(notePath, contentWithCb);
 				result.created++;
 			}
