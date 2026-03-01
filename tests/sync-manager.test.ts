@@ -1014,3 +1014,83 @@ describe('runSync — CB slot injection (integration)', () => {
 	});
 });
 
+// ─── CB_FM frontmatter integrity (integration) ────────────────────────────
+
+describe('runSync — CB_FM frontmatter integrity (integration)', () => {
+	it('created note starts with --- (valid Obsidian frontmatter)', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		const files = (app.vault as Vault).listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+		const content = (app.vault as Vault).readByPath(notePath)!;
+
+		expect(content.startsWith('---\n')).toBe(true);
+	});
+
+	it('YAML frontmatter has no HTML CB markers wrapping it', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		const files = (app.vault as Vault).listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+		const content = (app.vault as Vault).readByPath(notePath)!;
+
+		// Must NOT have HTML comment markers around the frontmatter block
+		const lines = content.split('\n');
+		expect(lines[0]).toBe('---');
+		expect(lines[0]).not.toContain('<!--');
+	});
+
+	it('note created from {{CB_FM}} template starts with --- not HTML comment', async () => {
+		const cbFmTemplate = '{{CB_FM}}\n\n# {{title}}\n\n{{CB_HEADER}}';
+		const app = makeApp({ 'templates/fm.md': cbFmTemplate });
+		const settings = makeSettings({ templatePath: 'templates/fm.md' });
+
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		const files = (app.vault as Vault).listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+		const content = (app.vault as Vault).readByPath(notePath)!;
+
+		expect(content.startsWith('---\n')).toBe(true);
+		expect(content).not.toMatch(/^<!--/);
+	});
+
+	it('note contains type: meeting in YAML block', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		const files = (app.vault as Vault).listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+		const content = (app.vault as Vault).readByPath(notePath)!;
+
+		// Extract frontmatter block
+		const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+		expect(fmMatch).not.toBeNull();
+		expect(fmMatch![1]).toContain('type: meeting');
+		expect(fmMatch![1]).toContain('title:');
+	});
+
+	it('re-sync does not duplicate frontmatter delimiters', async () => {
+		const app = new App();
+		const settings = makeSettings();
+		// First sync: create the note
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+		// Second sync: update it
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		const files = (app.vault as Vault).listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+		const content = (app.vault as Vault).readByPath(notePath)!;
+
+		// Count --- occurrences: exactly 2 (opening + closing frontmatter)
+		const dashes = (content.match(/^---$/gm) ?? []).length;
+		expect(dashes).toBe(2);
+	});
+});
+
+

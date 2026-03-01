@@ -81,8 +81,11 @@ describe('injectBlocks — token replacement', () => {
 			CB_CONTEXT: 'context content',
 			CB_FOOTER: 'footer content',
 		});
-		expect(result).toContain('<!-- CB:BEGIN CB_FM -->');
+		// CB_FM: no HTML markers — pure fenced YAML
+		expect(result).not.toContain('<!-- CB:BEGIN CB_FM -->');
+		expect(result).toContain('---');
 		expect(result).toContain('frontmatter');
+		// Other slots: still have HTML markers
 		expect(result).toContain('<!-- CB:BEGIN CB_CONTEXT -->');
 		expect(result).toContain('context content');
 		expect(result).toContain('<!-- CB:BEGIN CB_FOOTER -->');
@@ -223,7 +226,7 @@ describe('extractSlotContent', () => {
 describe('round-trip: template → first inject → update', () => {
 	it('preserves all user content across two inject cycles', () => {
 		const template =
-			'---\n{{CB_FM}}\n---\n# Title\n\n{{CB_HEADER}}\n\n## My Notes\n\n- user note\n\n{{CB_FOOTER}}';
+			'{{CB_FM}}\n# Title\n\n{{CB_HEADER}}\n\n## My Notes\n\n- user note\n\n{{CB_FOOTER}}';
 
 		const afterFirst = injectBlocks(template, {
 			CB_FM: 'type: meeting',
@@ -251,3 +254,60 @@ describe('round-trip: template → first inject → update', () => {
 		expect(afterSecond).toContain('- [ ] Follow up');
 	});
 });
+
+// ─── CB_FM special-case behaviour ──────────────────────────────────────
+
+describe('CB_FM — frontmatter injection', () => {
+	it('wrapSlot(CB_FM) returns fenced YAML without HTML markers', () => {
+		const result = wrapSlot('CB_FM', 'type: meeting\ntitle: "Test"');
+		expect(result).toBe('---\ntype: meeting\ntitle: "Test"\n---');
+		expect(result).not.toContain('<!-- CB:BEGIN');
+		expect(result).not.toContain('<!-- CB:END');
+	});
+
+	it('injecting CB_FM produces output starting with ---', () => {
+		const template = '{{CB_FM}}\n\n# Meeting';
+		const result = injectBlocks(template, { CB_FM: 'type: meeting\ntitle: "T"' });
+		expect(result.startsWith('---\n')).toBe(true);
+	});
+
+	it('other slots still get HTML markers when CB_FM is also injected', () => {
+		const template = '{{CB_FM}}\n\n{{CB_HEADER}}\n\n{{CB_FOOTER}}';
+		const result = injectBlocks(template, {
+			CB_FM: 'type: meeting',
+			CB_HEADER: 'header content',
+			CB_FOOTER: 'footer content',
+		});
+		expect(result.startsWith('---\n')).toBe(true);
+		expect(result).toContain('<!-- CB:BEGIN CB_HEADER -->');
+		expect(result).toContain('<!-- CB:BEGIN CB_FOOTER -->');
+		expect(result).not.toContain('<!-- CB:BEGIN CB_FM -->');
+	});
+
+	it('second injection replaces existing frontmatter idempotently', () => {
+		const template = '{{CB_FM}}\n\n# Meeting\n\n{{CB_HEADER}}';
+		const first = injectBlocks(template, { CB_FM: 'type: meeting\ndraft: true', CB_HEADER: 'H1' });
+		// Second inject with updated FM
+		const second = injectBlocks(first, { CB_FM: 'type: meeting\ndraft: false', CB_HEADER: 'H2' });
+		expect(second.startsWith('---\n')).toBe(true);
+		expect(second).toContain('draft: false');
+		expect(second).not.toContain('draft: true');
+		// No duplicate frontmatter
+		const fmMatches = second.match(/^---/gm) ?? [];
+		expect(fmMatches).toHaveLength(2); // opening --- and closing ---
+	});
+
+	it('same FM injected twice yields identical result (idempotent)', () => {
+		const template = '{{CB_FM}}\n\n## Notes';
+		const once = injectBlocks(template, { CB_FM: 'type: meeting' });
+		const twice = injectBlocks(once, { CB_FM: 'type: meeting' });
+		expect(once).toBe(twice);
+	});
+
+	it('no {{CB_FM}} token remains after injection', () => {
+		const template = '{{CB_FM}}\n\n# Title';
+		const result = injectBlocks(template, { CB_FM: 'type: meeting' });
+		expect(result).not.toContain('{{CB_FM}}');
+	});
+});
+
