@@ -137,11 +137,18 @@ tasks:
       - |
         ASSETS="main.js manifest.json"
         if [ -f styles.css ]; then ASSETS="$ASSETS styles.css"; fi
+        # Push commits + tag before creating the release (avoids "tag exists locally
+        # but not on remote" error when _commit-and-tag ran without pushing)
+        git push origin main --tags
         gh release create {{.VERSION}} $ASSETS \
           --title "v{{.VERSION}}" \
           --notes "See CHANGELOG.md for details."
       - echo "Released v{{.VERSION}} on GitHub."
 
+  rel:
+    desc: Alias for gh-release — create a GitHub Release for the current version
+    cmds:
+      - task: gh-release
   # ── Convenience ──────────────────────────────────────────────────────────────
 
   ci:
