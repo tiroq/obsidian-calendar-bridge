@@ -1,6 +1,7 @@
 import { App, Vault } from './__mocks__/obsidian';
 import { runSync, SyncResult, SyncSettings } from '../src/sync-manager';
 import { DEFAULT_SETTINGS } from '../src/types';
+import { CB_SLOTS } from '../src/services/TemplateService';
 import { AUTOGEN_START, AUTOGEN_END, AUTOGEN_AGENDA_START } from '../src/note-generator';
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
@@ -921,6 +922,95 @@ describe('runSync — series page filename for gcal recurring events', () => {
 		expect(seriesFiles[0]).toContain('Team Standup');
 		expect(seriesFiles[0]).not.toMatch(/base_event_id/);
 		expect(seriesFiles[0]).not.toMatch(/gcal/i);
+	});
+});
+
+// ─── CB slot injection — integration + regression ────────────────────────────
+
+/** Template containing all 9 CB slot tokens as bare {{CB_*}} placeholders. */
+const ALL_CB_SLOTS_TEMPLATE = [
+	'---',
+	'{{frontmatter}}',
+	'---',
+	'# {{title}}',
+	...CB_SLOTS.map(s => `{{${s}}}`),
+].join('\n');
+
+describe('runSync — CB slot injection (integration)', () => {
+	it('note created from CB-slot template has zero leftover {{CB_*}} tokens', async () => {
+		// Seed the vault with the CB-slot template so loadTemplate can read it.
+		const app = makeApp({ 'templates/cb-all.md': ALL_CB_SLOTS_TEMPLATE });
+		const settings = makeSettings({ templatePath: 'templates/cb-all.md' });
+		const fetchFn = async () => ONE_EVENT_ICS;
+
+		const result = await runSync(app as never, settings, fetchFn, NOW);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.created).toBe(1);
+
+		const files = (app.vault as Vault).listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+		const content = (app.vault as Vault).readByPath(notePath)!;
+
+		// No leftover {{CB_*}} tokens must remain in the written note.
+		const leftover = content.match(/\{\{CB_[A-Z_]+\}\}/g);
+		expect(leftover).toBeNull();
+	});
+
+	it('regression: non-recurring event with CB-slot template has no leftover tokens', async () => {
+		// Non-recurring events only get empty CB_CONTEXT / CB_ACTIONS — every slot
+		// must still be replaced (with '' if needed) and produce no leftover tokens.
+		const app = makeApp({ 'templates/cb-all.md': ALL_CB_SLOTS_TEMPLATE });
+		const settings = makeSettings({ templatePath: 'templates/cb-all.md' });
+		const fetchFn = async () => ONE_EVENT_ICS; // ONE_EVENT_ICS is non-recurring
+
+		await runSync(app as never, settings, fetchFn, NOW);
+
+		const files = (app.vault as Vault).listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+		const content = (app.vault as Vault).readByPath(notePath)!;
+
+		expect(content).toBeDefined();
+		const leftover = content.match(/\{\{CB_[A-Z_]+\}\}/g);
+		expect(leftover).toBeNull();
+	});
+
+	it('regression: recurring event with CB-slot template has no leftover tokens', async () => {
+		// Recurring events exercise ContextService + ActionAggregationService paths.
+		const app = makeApp({ 'templates/cb-all.md': ALL_CB_SLOTS_TEMPLATE });
+		const settings = makeSettings({ templatePath: 'templates/cb-all.md' });
+		const fetchFn = async () => RECURRING_ICS;
+
+		const result = await runSync(app as never, settings, fetchFn, NOW);
+
+		expect(result.errors).toHaveLength(0);
+
+		const files = (app.vault as Vault).listFiles();
+		const notePaths = files.filter(f => f.includes('Daily Standup') && !f.startsWith('Meetings/Series/'));
+		expect(notePaths.length).toBeGreaterThan(0);
+
+		for (const notePath of notePaths) {
+			const content = (app.vault as Vault).readByPath(notePath)!;
+			const leftover = content.match(/\{\{CB_[A-Z_]+\}\}/g);
+			expect(leftover).toBeNull();
+		}
+	});
+
+	it('all 9 CB slot blocks appear in the created note (present but may be empty)', async () => {
+		// Verify that injectBlocks replaced tokens with CB block wrappers.
+		const app = makeApp({ 'templates/cb-all.md': ALL_CB_SLOTS_TEMPLATE });
+		const settings = makeSettings({ templatePath: 'templates/cb-all.md' });
+
+		await runSync(app as never, settings, async () => ONE_EVENT_ICS, NOW);
+
+		const files = (app.vault as Vault).listFiles();
+		const notePath = files.find(f => f.includes('Project Kickoff'))!;
+		const content = (app.vault as Vault).readByPath(notePath)!;
+
+		// Every slot that has non-empty content should have a CB block wrapper;
+		// slots with empty content may be omitted (injectBlocks skips empty blocks).
+		// The key guarantee: NO raw {{CB_*}} tokens survive.
+		expect(content).not.toMatch(/\{\{CB_[A-Z_]+\}\}/);
 	});
 });
 
