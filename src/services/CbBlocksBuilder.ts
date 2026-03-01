@@ -6,7 +6,7 @@
  * template without leaving any leftover tokens.
  *
  * Slots:
- *   CB_FM          → YAML frontmatter lines (no fences — template provides ---)
+ *   CB_FM          → YAML frontmatter lines (no fences — wrapSlot adds them)
  *   CB_HEADER      → structured header: time, calendar, recurrence flag
  *   CB_LINKS       → meet/zoom/teams links + series link
  *   CB_CONTEXT     → pre-meeting context from recent series notes (recurring only)

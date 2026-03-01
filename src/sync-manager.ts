@@ -498,6 +498,9 @@ export async function runSync(
 				if (updatedLeftovers?.length) {
 					throw new Error(`CB slots not processed: ${updatedLeftovers.join(', ')}`);
 				}
+				if (updated.startsWith('---\n') === false && cbBlocks.CB_FM) {
+					throw new Error('Frontmatter must start at the first line (---). CB_FM injection broken.');
+				}
 				if (updated !== existingContent) {
 					console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → UPDATE ${notePath} (AUTOGEN changed)`);
 					await app.vault.modify(existing, updated);
@@ -519,6 +522,9 @@ export async function runSync(
 				const leftovers = contentWithCb.match(/\{\{CB_[A-Z_]+\}\}/g);
 				if (leftovers?.length) {
 					throw new Error(`CB slots not processed: ${leftovers.join(', ')}`);
+				}
+				if (contentWithCb.startsWith('---\n') === false && cbBlocks.CB_FM) {
+					throw new Error('Frontmatter must start at the first line (---). CB_FM injection broken.');
 				}
 				await app.vault.create(notePath, contentWithCb);
 				result.created++;
