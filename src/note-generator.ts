@@ -286,8 +286,6 @@ export function buildFrontmatter(
 			}
 		}
 		if (event.location)       lines.push(`location: ${yamlString(event.location)}`);
-		if (event.conferenceUrl)  lines.push(`meet_url: ${event.conferenceUrl}`);
-		if (event.teamsUrl)       lines.push(`teams_url: ${event.teamsUrl}`);
 		if (event.meetingUrl)     lines.push(`meeting_url: ${event.meetingUrl}`);
 	}
 
@@ -491,6 +489,10 @@ export function buildLinksBlock(opts: {
 		const name = nextPath.split('/').pop()?.replace(/\.md$/, '') ?? 'Next';
 		lines.push(`Next: [[${name}]]`);
 	}
+	if (event.meetingUrl) {
+		lines.push('');
+		lines.push(`🔗 Join Meeting: [Open](${event.meetingUrl})`);
+	}
 
 	return lines.join('\n');
 }
@@ -567,8 +569,6 @@ export function fillTemplateNormalized(
 		.replace(/\{\{series_name\}\}/g,      seriesName)
 		.replace(/\{\{series_key\}\}/g,       event.seriesKey)
 		.replace(/\{\{location\}\}/g,         event.location ?? '')
-		.replace(/\{\{conference_url\}\}/g,   event.conferenceUrl ?? '')
-		.replace(/\{\{teams_url\}\}/g,      event.teamsUrl ?? '')
 		.replace(/\{\{meeting_url\}\}/g,    event.meetingUrl ?? '')
 		.replace(/\{\{attendees_yaml\}\}/g,   attendeesYaml)
 		.replace(/\{\{agenda_block\}\}/g,     agendaBlock)
