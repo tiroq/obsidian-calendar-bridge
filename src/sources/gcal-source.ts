@@ -435,9 +435,7 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 		// Extract Teams/Zoom/Meet links from free-text description + location
 		const freeText = [item.description, item.location].filter(Boolean).join(' ');
 		const extracted = freeText ? extractMeetingLinks(freeText) : {};
-		// teamsUrl: from description/location
-		const teamsUrl = extracted.teamsUrl;
-		// meetingUrl priority: conferenceData URL > extracted Meet/Zoom > Teams
+		// meetingUrl priority: conferenceData URL > extracted Meet/Zoom/Teams
 		const meetingUrl = conferenceUrl ?? extracted.meetingUrl;
 
 		// Attendees
@@ -472,9 +470,7 @@ export class GoogleCalendarAdapter implements CalendarSourceAdapter {
 			updatedAt: item.updated,
 			description: item.description || undefined,
 			location: item.location || undefined,
-			conferenceUrl: meetingUrl,   // backward compat — keeps existing tests green
 			attendees: attendees.length > 0 ? attendees : undefined,
-			teamsUrl,
 			meetingUrl,
 			organizer,
 			sourceName: this.name,

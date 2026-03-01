@@ -121,8 +121,7 @@ export class IcsSourceAdapter implements CalendarSourceAdapter {
 		// Best-effort conference URL + Teams URL from free-text description + location
 		const freeText = [e.location, e.description].filter(Boolean).join(' ');
 		const extracted = freeText ? extractMeetingLinks(freeText) : {};
-		const conferenceUrl = extracted.meetingUrl;
-		const teamsUrl = extracted.teamsUrl;
+		const meetingUrl = extracted.meetingUrl;
 
 		// Determine timezone — ICS doesn't give us the TZID easily here,
 		// but we preserve it as empty to let rendering fall back to default
@@ -160,9 +159,7 @@ export class IcsSourceAdapter implements CalendarSourceAdapter {
 			isRecurring: e.isRecurring,
 			description: e.description || undefined,
 			location: e.location || undefined,
-			conferenceUrl,
-			teamsUrl,
-			meetingUrl: conferenceUrl,  // meetingUrl mirrors conferenceUrl for ICS
+			meetingUrl,
 			attendees: attendees.length > 0 ? attendees : undefined,
 			organizer,
 			sourceName: this.name,
