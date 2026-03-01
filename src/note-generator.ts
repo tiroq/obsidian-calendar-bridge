@@ -52,13 +52,12 @@ export const AUTOGEN_LINKS_END     = '<!-- AUTOGEN:LINKS:END -->';
 
 // ─── Default template ─────────────────────────────────────────────────────────
 
-export const DEFAULT_TEMPLATE = `---
-{{frontmatter}}
----
+export const DEFAULT_TEMPLATE = `{{CB_FM}}
+
 # {{title}}
 
 **Date:** {{start_human}}
-**Time:** {{start_human}} – {{end_human}}
+**Time:** {{start_human}} \u2013 {{end_human}}
 **Duration:** {{duration}}
 **Location:** {{location}}
 **Conference:** {{conference_url}}
