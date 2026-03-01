@@ -478,6 +478,32 @@ describe('buildFrontmatter', () => {
 	});
 });
 
+	describe('buildFrontmatter — meeting_url canonical field', () => {
+	const settings = { ...DEFAULT_SETTINGS } as PluginSettings;
+
+	it('emits meeting_url when event.meetingUrl is set', () => {
+		const fm = buildFrontmatter(
+			makeNormalized({ meetingUrl: 'https://teams.microsoft.com/l/meetup-join/abc' }),
+			settings,
+		);
+		expect(fm).toContain('meeting_url: https://teams.microsoft.com/l/meetup-join/abc');
+	});
+
+	it('does not emit meet_url or teams_url (old fields removed)', () => {
+		const fm = buildFrontmatter(
+			makeNormalized({ meetingUrl: 'https://zoom.us/j/123' }),
+			settings,
+		);
+		expect(fm).not.toContain('meet_url');
+		expect(fm).not.toContain('teams_url');
+	});
+
+	it('omits meeting_url when event.meetingUrl is undefined', () => {
+		const fm = buildFrontmatter(makeNormalized({ meetingUrl: undefined }), settings);
+		expect(fm).not.toContain('meeting_url');
+	});
+});
+
 // ─── buildAgendaBlock ────────────────────────────────────────────────────────
 
 describe('buildAgendaBlock', () => {
@@ -603,6 +629,19 @@ describe('buildLinksBlock', () => {
 		expect(block.trim()).toBe('## Links');
 	});
 });
+
+	it('includes join meeting link when meetingUrl is set', () => {
+		const block = buildLinksBlock({
+			event: makeNormalized({ meetingUrl: 'https://meet.google.com/abc-def' }),
+		});
+		expect(block).toContain('🔗 Join Meeting');
+		expect(block).toContain('https://meet.google.com/abc-def');
+	});
+
+	it('omits join meeting line when meetingUrl is absent', () => {
+		const block = buildLinksBlock({ event: makeNormalized({ meetingUrl: undefined }) });
+		expect(block).not.toContain('Join Meeting');
+	});
 
 // ─── fillTemplateNormalized ───────────────────────────────────────────────────
 

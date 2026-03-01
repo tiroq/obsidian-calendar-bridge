@@ -434,6 +434,44 @@ describe('listEvents', () => {
 		expect(events[0].meetingUrl).toBe('https://meet.google.com/abc');
 	});
 
+	test('Teams link in description maps to meetingUrl; no conferenceUrl or teamsUrl on event', async () => {
+		const url = 'https://teams.microsoft.com/l/meetup-join/19:meeting_abc@thread.v2/0?context=%7B%7D';
+		mockEvents([makeGCalEvent({ description: `Join via Teams: ${url}` })]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events[0].meetingUrl).toBe(url);
+		// These fields should not exist on the normalized event at all
+		expect('conferenceUrl' in events[0]).toBe(false);
+		expect('teamsUrl' in events[0]).toBe(false);
+	});
+
+	test('Zoom link in description maps to meetingUrl', async () => {
+		const url = 'https://company.zoom.us/j/123456789?pwd=abc';
+		mockEvents([makeGCalEvent({ description: `Zoom: ${url}` })]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events[0].meetingUrl).toBe(url);
+	});
+
+	test('event with no conference link has meetingUrl undefined', async () => {
+		mockEvents([makeGCalEvent({ description: 'No link here', conferenceData: undefined })]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events[0].meetingUrl).toBeUndefined();
+	});
+
+	test('conferenceData takes priority over description link', async () => {
+		const confUrl = 'https://meet.google.com/xyz-from-conf';
+		const descUrl = 'https://company.zoom.us/j/999?pwd=xyz';
+		mockEvents([makeGCalEvent({
+			conferenceData: { entryPoints: [{ entryPointType: 'video', uri: confUrl }] },
+			description: `Backup Zoom: ${descUrl}`,
+		})]);
+		const adapter = makeAdapter(makeSettings({ accessToken: 'tok' }));
+		const events = await adapter.listEvents('primary', TIME_MIN, TIME_MAX);
+		expect(events[0].meetingUrl).toBe(confUrl);
+	});
+
 	test('maps attendees and filters out self', async () => {
 		mockEvents([makeGCalEvent({
 			attendees: [
