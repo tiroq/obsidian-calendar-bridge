@@ -99,6 +99,48 @@ describe('extractActions', () => {
 		const result = extractActions(content);
 		expect(result).toContain('Star bullet action');
 	});
+
+	it('ignores CB marker lines within a CB_ACTIONS slot (corrupted note)', () => {
+		// A note where a previous sync produced nested markers:
+		const content = [
+			'<!-- CB:BEGIN CB_ACTIONS -->',
+			'<!-- CB:BEGIN CB_ACTIONS -->',
+			'- [ ] Real task',
+			'<!-- CB:END CB_ACTIONS -->',
+			'<!-- CB:END CB_ACTIONS -->',
+		].join('\n');
+		const result = extractActions(content);
+		expect(result).toContain('Real task');
+		expect(result).not.toContain('CB:BEGIN');
+		expect(result).not.toContain('CB:END');
+		expect(result.some(a => a.startsWith('<!--'))).toBe(false);
+	});
+
+	it('ignores empty checkbox placeholder (- [ ] with no text)', () => {
+		const content = [
+			'<!-- CB:BEGIN CB_ACTIONS -->',
+			'- [ ]',
+			'- [ ] Real action',
+			'<!-- CB:END CB_ACTIONS -->',
+		].join('\n');
+		const result = extractActions(content);
+		expect(result).toContain('Real action');
+		expect(result.filter(a => a === '')).toHaveLength(0);
+	});
+
+	it('ignores code fences within an action section heading', () => {
+		const content = [
+			'## Action Items',
+			'- Do the thing',
+			'\`\`\`',
+			'some code',
+			'\`\`\`',
+		].join('\n');
+		const result = extractActions(content);
+		expect(result).toContain('Do the thing');
+		expect(result.some(a => a.includes('\`\`\`'))).toBe(false);
+		expect(result).not.toContain('some code');
+	});
 });
 
 // ─── ActionAggregationService ───────────────────────────────────────────────
@@ -241,5 +283,28 @@ describe('ActionAggregationService', () => {
 		expect(result.actions).toContain('Gamma');
 		// Beta appears only once
 		expect(result.actions.filter(a => a.toLowerCase() === 'beta')).toHaveLength(1);
+	});
+	it('corrupted note with nested CB markers produces clean aggregation result', async () => {
+		const app = makeApp();
+		// A note whose CB_ACTIONS slot was corrupted by a previous bug (nested markers)
+		const corruptedContent = [
+			`series_key: ${SERIES}`,
+			'<!-- CB:BEGIN CB_ACTIONS -->',
+			'<!-- CB:BEGIN CB_ACTIONS -->',
+			'- [ ] Actual task',
+			'<!-- CB:END CB_ACTIONS -->',
+			'<!-- CB:END CB_ACTIONS -->',
+		].join('\n');
+		addNote(app, FOLDER, 'corrupted.md', corruptedContent, 1000);
+		const svc = new ActionAggregationService(app);
+		const result = await svc.aggregateActions({ seriesKey: SERIES, notesFolder: FOLDER });
+		// Content must be clean markdown — no CB markers propagated
+		expect(result.content).not.toContain('<!--');
+		expect(result.content).not.toContain('CB:BEGIN');
+		expect(result.content).not.toContain('CB:END');
+		// The actual task should survive
+		expect(result.content).toContain('Actual task');
+		// Formatted as a proper checkbox
+		expect(result.content).toMatch(/- \[ \] Actual task/);
 	});
 });

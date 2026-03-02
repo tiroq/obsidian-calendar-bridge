@@ -112,8 +112,15 @@ export class ActionAggregationService {
 			}
 		}
 
-		const content = allActions.length > 0
-			? allActions.map(a => `- [ ] ${a}`).join('\n')
+		const cleanActions = allActions
+			.map(a => a.trim())
+			.filter(a => a.length > 0)
+			// Defensive: never carry over CB markers/comments if they appear in text
+			.filter(a => !a.startsWith('<!--'))
+			.filter(a => !a.includes('CB:BEGIN') && !a.includes('CB:END'));
+
+		const content = cleanActions.length > 0
+			? cleanActions.map(a => `- [ ] ${a}`).join('\n')
 			: '';
 
 		return { content, actions: allActions, scanned: candidates.length };
@@ -155,10 +162,19 @@ export function extractActions(content: string): string[] {
 		// Capture lines until the next ## heading
 		const sectionBody = afterHeading.split(/^##/m)[0];
 		for (const line of sectionBody.split('\n')) {
-			const stripped = line.replace(/^[-*]\s+/, '').trim();
-			if (stripped && !stripped.startsWith('#')) {
-				actions.push(stripped);
-			}
+			const trimmedLine = line.trim();
+
+			// Skip noise: only list items are valid actions
+			if (!trimmedLine) continue;
+			if (trimmedLine.startsWith('#')) continue;
+			if (trimmedLine.startsWith('```')) continue;
+			if (trimmedLine.startsWith('<!--')) continue;
+			// Only push lines that are actual list items
+			if (!/^[-*]\s+/.test(trimmedLine)) continue;
+
+			const stripped = trimmedLine.replace(/^[-*]\s+/, '').trim();
+			if (!stripped) continue;
+			actions.push(stripped);
 		}
 	}
 
@@ -171,14 +187,27 @@ export function extractActions(content: string): string[] {
  */
 function parseActionLine(line: string): string | null {
 	const trimmed = line.trim();
+
+	// Ignore HTML comments / CB markers
+	if (!trimmed || trimmed.startsWith('<!--')) return null;
+
 	// Completed action — skip
 	if (/^[-*]\s+\[x\]/i.test(trimmed)) return null;
-	// Unchecked
+
+	// Unchecked checkbox (require non-empty text after it)
 	const unchecked = trimmed.match(/^[-*]\s+\[ \]\s+(.+)$/);
-	if (unchecked) return unchecked[1].trim();
-	// Plain list item
+	if (unchecked) {
+		const text = unchecked[1].trim();
+		return text ? text : null;
+	}
+
+	// Plain list item (require non-empty)
 	const plain = trimmed.match(/^[-*]\s+(.+)$/);
-	if (plain) return plain[1].trim();
+	if (plain) {
+		const text = plain[1].trim();
+		return text ? text : null;
+	}
+
 	return null;
 }
 
