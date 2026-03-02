@@ -1253,6 +1253,17 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 	private renderSeriesNoteSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Series Note Aggregation').setHeading();
 
+		this.addFileSetting(containerEl, {
+			name: 'Series template path',
+			desc: 'If specified, this template will be used when creating new series notes. If empty or invalid, the built-in default template is used.',
+			placeholder: '_series/_templates/Series.md',
+			get: () => this.plugin.settings.seriesTemplatePath,
+			set: async v => {
+				this.plugin.settings.seriesTemplatePath = v;
+				await this.plugin.saveSettings();
+			},
+		});
+
 		this.addTextSetting(containerEl, {
 			name: 'Series action marker',
 			desc: 'Block-reference tag that marks a task for aggregation into the series note. Add this tag to any task in a meeting note.',
