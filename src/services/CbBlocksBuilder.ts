@@ -82,43 +82,27 @@ export async function buildCbBlocks(
 	});
 	trace(`CB_LINKS: built`);
 
-	// ── CB_CONTEXT / CB_ACTIONS: premium, recurring only ─────────────────────
+	// ── CB_CONTEXT / CB_ACTIONS: redirect to series note (series note is now the canonical source) ──
 	let context = '';
 	let actions = '';
 
-	if (event.isRecurring && event.seriesKey) {
-		try {
-			const ctxResult = await contextService.buildContext({
-				seriesKey: event.seriesKey,
-				notesFolder,
-				maxLookback: settings.contextDecisionLookbackNotes ?? 10,
-				horizonDays: settings.contextDecisionHorizonDays ?? 14,
-				dropExpiredByDate: settings.contextDropExpiredDecisionsByDate ?? true,
-				stickyToken: settings.contextStickyToken ?? '!sticky',
-				debug: debugEnabled,
-			})
-			context = ctxResult.content;
-			trace(`CB_CONTEXT: ${ctxResult.scanned} notes scanned, ${ctxResult.sourcePaths.length} contributed`);
-		} catch (err) {
-			trace(`CB_CONTEXT: error — ${(err as Error).message}`);
-			// non-fatal — degrade silently
-		}
-
-		try {
-			const actResult = await actionService.aggregateActions({
-				seriesKey: event.seriesKey,
-				notesFolder,
-				maxLookback: 5,
-			});
-			actions = actResult.content;
-			trace(`CB_ACTIONS: ${actResult.scanned} notes scanned, ${actResult.actions.length} actions found`);
-		} catch (err) {
-			trace(`CB_ACTIONS: error — ${(err as Error).message}`);
-			// non-fatal — degrade silently
-		}
+	if (event.isRecurring && event.seriesKey && seriesPagePath) {
+		const seriesLink = `[[${seriesPagePath}]]`;
+		context = `> Aggregated context is in the series note: ${seriesLink}`;
+		actions = `> Open series actions are tracked in the series note: ${seriesLink}`;
+		trace(`CB_CONTEXT/CB_ACTIONS: redirected to series note`);
+	} else if (event.isRecurring && event.seriesKey) {
+		context = '> See the series note for aggregated context.';
+		actions = '> See the series note for open actions.';
+		trace(`CB_CONTEXT/CB_ACTIONS: redirected (no seriesPagePath)`);
 	} else {
 		trace(`CB_CONTEXT/CB_ACTIONS: skipped (non-recurring or no seriesKey)`);
 	}
+	// ── CB_SERIES_LINK: wikilink to series note ──────────────────────────────
+	const seriesLink = (event.isRecurring && seriesPagePath)
+		? `Related series: [[${seriesPagePath}]]`
+		: '';
+	trace(`CB_SERIES_LINK: ${seriesLink ? 'set' : 'empty'}`);
 
 	// ── CB_DIAGNOSTICS: trace output (debug only) ────────────────────────────
 	const diagnostics = debugEnabled && diagnosticsLines.length > 0
@@ -126,7 +110,7 @@ export async function buildCbBlocks(
 		  diagnosticsLines.map(l => `- ${l}`).join('\n')
 		: '';
 
-	// ── Return complete map — ALL 9 slots, always strings ─────────────────────
+	// ── Return complete map — ALL 10 slots, always strings ─────────────────────
 	return {
 		CB_FM:          fm,
 		CB_HEADER:      header,
@@ -137,6 +121,7 @@ export async function buildCbBlocks(
 		CB_DECISIONS:   '',
 		CB_DIAGNOSTICS: diagnostics,
 		CB_FOOTER:      '',
+		CB_SERIES_LINK: seriesLink,
 	};
 }
 

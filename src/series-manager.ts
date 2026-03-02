@@ -329,6 +329,24 @@ ${frontmatter}
 
 ${wrapAutogen(autogenBody)}
 
+## Open Actions
+
+<!-- CB:BEGIN CB_SERIES_ACTIONS -->
+<!-- CB:END CB_SERIES_ACTIONS -->
+
+## Active Decisions
+
+<!-- CB:BEGIN CB_SERIES_DECISIONS -->
+<!-- CB:END CB_SERIES_DECISIONS -->
+
+## Meetings
+
+<!-- CB:BEGIN CB_SERIES_MEETINGS_INDEX -->
+<!-- CB:END CB_SERIES_MEETINGS_INDEX -->
+
+<!-- CB:BEGIN CB_SERIES_DIAGNOSTICS -->
+<!-- CB:END CB_SERIES_DIAGNOSTICS -->
+
 ## Notes
 
 *(Series-level notes here)*

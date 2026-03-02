@@ -263,6 +263,12 @@ export interface PluginSettings {
 	contextDecisionLookbackNotes: number;
 	contextDropExpiredDecisionsByDate: boolean;
 	contextStickyToken: string;
+
+	// Series note settings
+	seriesActionMarker: string;
+	seriesDecisionHorizonDays: number;
+	seriesDecisionLookbackNotes: number;
+	seriesDropExpiredDecisionsByDate: boolean;
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -302,7 +308,23 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	contextDecisionLookbackNotes: 10,
 	contextDropExpiredDecisionsByDate: true,
 	contextStickyToken: '!sticky',
+	// Series note defaults
+	seriesActionMarker: '^series',
+	seriesDecisionHorizonDays: 14,
+	seriesDecisionLookbackNotes: 30,
+	seriesDropExpiredDecisionsByDate: true,
 };
+
+// ─── Series slot types ────────────────────────────────────────────────────────
+
+export const CB_SERIES_SLOTS = [
+	'CB_SERIES_ACTIONS',
+	'CB_SERIES_DECISIONS',
+	'CB_SERIES_MEETINGS_INDEX',
+	'CB_SERIES_DIAGNOSTICS',
+] as const;
+
+export type CbSeriesSlot = typeof CB_SERIES_SLOTS[number];
 
 // ─── Legacy compat shim (kept so existing tests import still work) ────────────
 

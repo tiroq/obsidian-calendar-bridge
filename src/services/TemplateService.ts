@@ -36,17 +36,18 @@ export const CB_SLOTS = [
 	'CB_DECISIONS',
 	'CB_DIAGNOSTICS',
 	'CB_FOOTER',
+	'CB_SERIES_LINK',
 ] as const;
 
 export type CbSlot = typeof CB_SLOTS[number];
 
 // ─── Marker helpers ────────────────────────────────────────────────────────
 
-export function cbBegin(slot: CbSlot): string {
+export function cbBegin(slot: string): string {
 	return `<!-- CB:BEGIN ${slot} -->`;
 }
 
-export function cbEnd(slot: CbSlot): string {
+export function cbEnd(slot: string): string {
 	return `<!-- CB:END ${slot} -->`;
 }
 
@@ -61,7 +62,7 @@ export function cbEnd(slot: CbSlot): string {
  * Strip an existing CB wrapper for `slot` from `body`, returning only the inner content.
  * This prevents double-wrapping when upstream accidentally passes already-wrapped content.
  */
-function stripExistingCbWrapper(slot: CbSlot, body: string): string {
+function stripExistingCbWrapper(slot: string, body: string): string {
 	const beginRe = new RegExp(`^\\s*<!--\\s*CB:BEGIN\\s+${slot}\\s*-->\\s*\\n?`, 'mg');
 	const endRe   = new RegExp(`\\n?\\s*<!--\\s*CB:END\\s+${slot}\\s*-->\\s*$`, 'mg');
 	const hasBegin = beginRe.test(body);
@@ -73,7 +74,7 @@ function stripExistingCbWrapper(slot: CbSlot, body: string): string {
 		.replace(new RegExp(`\\n?\\s*<!--\\s*CB:END\\s+${slot}\\s*-->\\s*$`, 'mg'), '')
 		.trim();
 }
-export function wrapSlot(slot: CbSlot, content: string): string {
+export function wrapSlot(slot: string, content: string): string {
 	if (slot === 'CB_FM') {
 		// Frontmatter must be a pure YAML fence — no HTML markers.
 		return `---\n${content.trim()}\n---`;
@@ -136,12 +137,14 @@ export interface InjectBlocksOptions {
  */
 export function injectBlocks(
 	content: string,
-	blocks: Partial<Record<CbSlot, string>>,
+	blocks: Partial<Record<string, string>>,
 	opts: InjectBlocksOptions = {},
+	slotOrder?: readonly string[],
 ): string {
 	let result = content;
+	const slots = slotOrder ?? (CB_SLOTS as readonly string[]);
 
-	for (const slot of CB_SLOTS) {
+	for (const slot of slots) {
 		const body = blocks[slot];
 		if (body === undefined) continue;
 
@@ -191,7 +194,7 @@ export function injectBlocks(
 /** Regex matching the YAML frontmatter block at the top of a file. */
 const cbFmRe = /^---\n[\s\S]*?\n---\n?/;
 
-function cbBlockRe(slot: CbSlot): RegExp {
+function cbBlockRe(slot: string): RegExp {
 	return new RegExp(
 		`<!--\\s*CB:BEGIN\\s+${slot}\\s*-->[\\s\\S]*?<!--\\s*CB:END\\s+${slot}\\s*-->`,
 		'g',
@@ -201,7 +204,7 @@ function cbBlockRe(slot: CbSlot): RegExp {
 /** Greedy version of cbBlockRe — matches from the FIRST BEGIN to the LAST END for a slot.
  * Use in Mode 2 of injectBlocks to handle corrupted notes with nested/duplicate markers.
  */
-function cbBlockReGreedy(slot: CbSlot): RegExp {
+function cbBlockReGreedy(slot: string): RegExp {
 	return new RegExp(
 		`<!--\\s*CB:BEGIN\\s+${slot}\\s*-->[\\s\\S]*<!--\\s*CB:END\\s+${slot}\\s*-->`,
 		'g',
@@ -229,7 +232,7 @@ function hoistFrontmatter(content: string): string {
  * Extract the inner content of a named CB block from a note.
  * Returns `undefined` if the block is absent.
  */
-export function extractSlotContent(note: string, slot: CbSlot): string | undefined {
+export function extractSlotContent(note: string, slot: string): string | undefined {
 	const re = new RegExp(
 		`<!--\\s*CB:BEGIN\\s+${slot}\\s*-->([\\s\\S]*?)<!--\\s*CB:END\\s+${slot}\\s*-->`,
 	);
