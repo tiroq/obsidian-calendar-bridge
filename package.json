@@ -1,6 +1,6 @@
 {
   "name": "obsidian-calendar-bridge",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "description": "Connect Google Calendar or ICS feeds and auto-generate structured meeting drafts in Obsidian.",
   "main": "main.js",
   "scripts": {
