@@ -2,7 +2,7 @@
  * Calendar Bridge — Obsidian plugin entry point.
  *
  * Features:
- *   • 5 command-palette commands
+ *   • 7 command-palette commands
  *   • Status bar: last sync time / error indicator
  *   • Auto-sync interval timer
  *   • Startup sync
@@ -235,6 +235,29 @@ export default class CalendarBridgePlugin
 				this.triggerCreateNoteForEvent();
 			},
 		});
+		// 6. Promote selected tasks to series
+		this.addCommand({
+			id: 'promote-tasks-to-series',
+			name: 'Promote selected tasks to series note',
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file) return false;
+				if (checking) return true;
+				this.promoteTasksToSeries(file);
+			},
+		});
+
+		// 7. Migrate legacy series actions into series note
+		this.addCommand({
+			id: 'migrate-series-actions',
+			name: 'Migrate legacy series actions into series note',
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file) return false;
+				if (checking) return true;
+				this.migrateLegacySeriesActions(file);
+			},
+		});
 	}
 
 
@@ -259,6 +282,83 @@ export default class CalendarBridgePlugin
 		(this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting?.openTabById(this.manifest.id);
 	}
 
+	// ── Series task promotion ──────────────────────────────────────────────────
+
+	/**
+	 * Append `^series` to every incomplete task in the current editor selection.
+	 * If there is no active selection, appends to all incomplete tasks in the file.
+	 */
+	private async promoteTasksToSeries(file: TFile): Promise<void> {
+		const marker = this.settings.seriesActionMarker ?? '^series';
+		const editor = this.app.workspace.activeEditor?.editor;
+		const content = await this.app.vault.read(file);
+		const lines = content.split('\n');
+
+		let selectionStart: number | null = null;
+		let selectionEnd: number | null = null;
+		if (editor) {
+			const sel = editor.listSelections?.();
+			if (sel && sel.length > 0) {
+				selectionStart = Math.min(sel[0].anchor.line, sel[0].head.line);
+				selectionEnd   = Math.max(sel[0].anchor.line, sel[0].head.line);
+			}
+		}
+
+		let promoted = 0;
+		const updated = lines.map((line, idx) => {
+			if (selectionStart !== null && selectionEnd !== null) {
+				if (idx < selectionStart || idx > selectionEnd) return line;
+			}
+			// Only incomplete task lines: - [ ] ...
+			if (!/^\s*-\s+\[\s\]/.test(line)) return line;
+			// Already has the marker
+			if (line.includes(marker)) return line;
+			promoted++;
+			return line.trimEnd() + ' ' + marker;
+		});
+
+		if (promoted === 0) {
+			new Notice('No promotable tasks found (incomplete tasks without ' + marker + ').');
+			return;
+		}
+		await this.app.vault.modify(file, updated.join('\n'));
+		new Notice(`Promoted ${promoted} task(s) with ${marker}. Run sync to aggregate into the series note.`);
+	}
+
+	/**
+	 * Inspect the current meeting note for legacy CB_ACTIONS content that contains
+	 * incomplete tasks WITHOUT the series marker. Shows a guidance Notice so the
+	 * user knows which tasks to promote before the next sync.
+	 */
+	private async migrateLegacySeriesActions(file: TFile): Promise<void> {
+		const marker = this.settings.seriesActionMarker ?? '^series';
+		const content = await this.app.vault.read(file);
+
+		// Extract CB_ACTIONS slot content
+		const slotMatch = content.match(
+			/<!--\s*CB:BEGIN\s+CB_ACTIONS\s*-->([\s\S]*?)<!--\s*CB:END\s+CB_ACTIONS\s*-->/,
+		);
+		if (!slotMatch) {
+			new Notice('No CB_ACTIONS block found in this note.');
+			return;
+		}
+
+		const slotContent = slotMatch[1];
+		const legacyTasks = slotContent
+			.split('\n')
+			.filter(l => /^\s*-\s+\[\s\]/.test(l) && !l.includes(marker));
+
+		if (legacyTasks.length === 0) {
+			new Notice('No legacy actions found. All tasks already have ' + marker + ' or the block is empty.');
+			return;
+		}
+
+		new Notice(
+			`Found ${legacyTasks.length} legacy action(s) without "${marker}". ` +
+			'Use "Promote selected tasks to series note" to mark them for series aggregation, then run sync.',
+			8000,
+		);
+	}
 	// ── Sync ─────────────────────────────────────────────────────────────────────
 
 	/**
