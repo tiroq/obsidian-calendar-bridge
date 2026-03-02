@@ -14,6 +14,7 @@
 
 import { App, TFile, requestUrl } from 'obsidian';
 import { injectBlocks, CbSlot } from './services/TemplateService';
+import { updateSeriesNote } from './services/SeriesNoteService';
 import { resolveTemplatePath } from './services/TemplateRoutingService';
 import { ContextService } from './services/ContextService';
 import { ActionAggregationService } from './services/ActionAggregationService';
@@ -42,7 +43,9 @@ import {
 	generateSeriesAutogen,
 	generateSeriesPageContent,
 	getSeriesPath,
+	getSeriesPagePathByKey,
 	groupBySeries,
+	groupBySeriesNormalized,
 	wrapAutogen,
 } from './series-manager';
 
@@ -591,6 +594,26 @@ export async function runSync(
 		}
 	}
 
+	// ── Second pass: update series notes with aggregated content ──────────────
+	const normalizedSeriesMap = groupBySeriesNormalized(filteredEvents);
+	for (const [seriesKey, series] of normalizedSeriesMap) {
+		const seriesNotePath = getSeriesPagePathByKey(series.seriesName, { ...settings, seriesFolder });
+		try {
+			const allFiles = app.vault.getFiles ? app.vault.getFiles() : [];
+			const meetingFiles: TFile[] = [];
+			for (const file of allFiles) {
+				if (!file.path.startsWith(notesFolder + '/') || !file.path.endsWith('.md')) continue;
+				try {
+					const fc = await app.vault.read(file);
+					if (fc.includes(`series_key: ${seriesKey}`)) meetingFiles.push(file);
+				} catch { /* skip unreadable */ }
+			}
+			await updateSeriesNote(app, seriesNotePath, series.seriesName, meetingFiles, settings, now);
+			console.log(`[CalendarBridge] SERIES_NOTES_UPDATE — "${series.seriesName}" → ${seriesNotePath}`);
+		} catch (err) {
+			result.errors.push(`Failed to update series note "${series.seriesName}": ${(err as Error).message}`);
+		}
+	}
 
 	console.log(`[CalendarBridge] RENDER_TEMPLATES_DONE — template applied to ${filteredEvents.length} event(s)`);
 	onProgress?.('completed', 100);
