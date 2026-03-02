@@ -14,7 +14,7 @@
 
 import { App, TFile, requestUrl } from 'obsidian';
 import { injectBlocks, CbSlot } from './services/TemplateService';
-import { updateSeriesNote } from './services/SeriesNoteService';
+import { updateSeriesNote, getOrCreateSeriesNote } from './services/SeriesNoteService';
 import { resolveTemplatePath } from './services/TemplateRoutingService';
 import { ContextService } from './services/ContextService';
 import { ActionAggregationService } from './services/ActionAggregationService';
@@ -576,14 +576,8 @@ export async function runSync(
 				}
 			} else {
 				console.log(`[CalendarBridge] SERIES_ACTION — "${series.title}" → CREATE ${seriesPath}`);
-				const rawContent = generateSeriesPageContent(series, notePathFn, now);
-				// Append metrics as a CB_DIAGNOSTICS slot when available
-				const metricsSlotContent = metricsBlock ? `## Series Health\n\n${metricsBlock}` : '';
-				const cbBlocks: Partial<Record<CbSlot, string>> = metricsSlotContent
-					? { CB_DIAGNOSTICS: metricsSlotContent }
-					: {};
-				const content = injectBlocks(rawContent, cbBlocks);
-				await app.vault.create(seriesPath, content);
+				// Use getOrCreateSeriesNote so the configured series template is respected.
+				await getOrCreateSeriesNote(app, seriesPath, series.uid, series.title, settings);
 				result.created++;
 			}
 		} catch (err) {
