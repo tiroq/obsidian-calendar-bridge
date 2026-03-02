@@ -1264,6 +1264,20 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 			},
 		});
 
+		new Setting(containerEl)
+			.setName('Meeting link format')
+			.setDesc('How meeting links are displayed in the series Meetings index. "Date only" shows just the date; "Date · Title" shows both.')
+			.addDropdown(d =>
+				d
+					.addOption('date', 'Date only  (2026-03-04)')
+					.addOption('date-title', 'Date · Title  (2026-03-04 · Meeting Name)')
+					.setValue(this.plugin.settings.seriesLinkFormat ?? 'date-title')
+					.onChange(async (v: string) => {
+						this.plugin.settings.seriesLinkFormat = v as 'date' | 'date-title';
+						await this.plugin.saveSettings();
+					}),
+			);
+
 		this.addTextSetting(containerEl, {
 			name: 'Series action marker',
 			desc: 'Block-reference tag that marks a task for aggregation into the series note. Add this tag to any task in a meeting note.',

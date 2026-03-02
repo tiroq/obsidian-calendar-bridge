@@ -270,6 +270,12 @@ export interface PluginSettings {
 	seriesDecisionLookbackNotes: number;
 	seriesDropExpiredDecisionsByDate: boolean;
 	seriesTemplatePath: string;
+	/**
+	 * Display format for meeting links in the series AUTOGEN meetings index.
+	 * 'date'       → [[full/path/To Note|2026-03-04]]
+	 * 'date-title' → [[full/path/To Note|2026-03-04 · Note Title]]
+	 */
+	seriesLinkFormat: 'date' | 'date-title';
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -315,6 +321,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	seriesDecisionLookbackNotes: 30,
 	seriesDropExpiredDecisionsByDate: true,
 	seriesTemplatePath: '',
+	seriesLinkFormat: 'date-title',
 };
 
 // ─── Series slot types ────────────────────────────────────────────────────────

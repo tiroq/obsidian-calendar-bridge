@@ -54,6 +54,7 @@ export async function updateSeriesNote(
 	const lookback    = settings.seriesDecisionLookbackNotes ?? 30;
 	const dropByDate  = settings.seriesDropExpiredDecisionsByDate ?? true;
 	const stickyToken = settings.contextStickyToken ?? '!sticky';
+	const linkFormat  = settings.seriesLinkFormat ?? 'date-title';
 
 	// Sort meeting files by mtime descending (most recent first)
 	const sorted = [...meetingFiles].sort(
@@ -67,9 +68,7 @@ export async function updateSeriesNote(
 	const meetingLinks: string[] = [];
 
 	for (const file of sorted) {
-		// Build wikilink (basename without .md)
-		const basename = file.name.replace(/\.md$/, '');
-		meetingLinks.push(`- [[${basename}]]`);
+		meetingLinks.push(`- ${formatMeetingLink(file, linkFormat)}`);
 	}
 
 	for (const file of candidates) {
@@ -224,7 +223,8 @@ export function extractDecisionsFromSlot(
  * Parse the source date for a note, trying:
  *   1. frontmatter `start:` or `date:` field
  *   2. YYYY-MM-DD pattern in filename
- *   3. file mtime fallback
+ *   3. YYYY-MM-DD pattern in folder path (e.g. Meetings/2026-03-04/...)
+ *   4. file mtime fallback
  */
 export function parseNoteDate(content: string, file: TFile): Date {
 	// 1. frontmatter start: or date:
@@ -247,8 +247,68 @@ export function parseNoteDate(content: string, file: TFile): Date {
 		);
 		if (!isNaN(d.getTime())) return d;
 	}
-	// 3. mtime fallback
+	// 3. YYYY-MM-DD in folder path
+	const pathMatch = /(\d{4})-(\d{2})-(\d{2})/.exec(file.path.replace(file.name, ''));
+	if (pathMatch) {
+		const d = new Date(
+			parseInt(pathMatch[1], 10),
+			parseInt(pathMatch[2], 10) - 1,
+			parseInt(pathMatch[3], 10),
+		);
+		if (!isNaN(d.getTime())) return d;
+	}
+	// 4. mtime fallback
 	return new Date(file.stat?.mtime ?? Date.now());
+}
+
+/**
+ * Extract a YYYY-MM-DD string from a TFile using path only (no vault reads).
+ * Priority: filename → folder path → mtime.
+ */
+export function extractDateStrFromPath(file: TFile): string {
+	const dateRe = /(\d{4})-(\d{2})-(\d{2})/;
+	const nameMatch = dateRe.exec(file.name);
+	if (nameMatch) return `${nameMatch[1]}-${nameMatch[2]}-${nameMatch[3]}`;
+	const folderPart = file.path.replace(file.name, '');
+	const pathMatch = dateRe.exec(folderPart);
+	if (pathMatch) return `${pathMatch[1]}-${pathMatch[2]}-${pathMatch[3]}`;
+	const mtime = new Date(file.stat?.mtime ?? Date.now());
+	const y = mtime.getFullYear();
+	const m = String(mtime.getMonth() + 1).padStart(2, '0');
+	const d = String(mtime.getDate()).padStart(2, '0');
+	return `${y}-${m}-${d}`;
+}
+
+/**
+ * Build a wikilink for a meeting file in the series meetings index.
+ * Always uses full path as link target to disambiguate duplicate basenames.
+ *
+ * format='date'       → [[full/path/To Note|2026-03-04]]
+ * format='date-title' → [[full/path/To Note|2026-03-04 · Note Title]]
+ */
+export function formatMeetingLink(
+	file: TFile,
+	format: 'date' | 'date-title',
+): string {
+	const linkPath = file.path.replace(/\.md$/, '');
+	const dateStr  = extractDateStrFromPath(file);
+	const title    = file.name.replace(/\.md$/, '');
+
+	console.log(
+		`[CalendarBridge] meetingLink — path: ${file.path} | dateSource: ${
+			/(\d{4}-\d{2}-\d{2})/.test(file.name)
+				? 'filename'
+				: /(\d{4}-\d{2}-\d{2})/.test(file.path.replace(file.name, ''))
+					? 'folder'
+					: 'mtime'
+		} | date: ${dateStr}`,
+	);
+
+	const display = format === 'date-title'
+		? `${dateStr} · ${title}`
+		: dateStr;
+
+	return `[[${linkPath}|${display}]]`;
 }
 
 function buildDiagnosticsBody(opts: {

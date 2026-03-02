@@ -4,8 +4,10 @@
  * Covers:
  *   1. extractSeriesTasks  — correct extraction & marker stripping
  *   2. extractDecisionsFromSlot — reads CB_DECISIONS block from note content
- *   3. parseNoteDate — frontmatter / filename / mtime fallback chain
- *   4. updateSeriesNote — idempotent update with full mock vault
+ *   3. parseNoteDate — frontmatter / filename / folder / mtime fallback chain
+ *   4. extractDateStrFromPath — path-only date extraction
+ *   5. formatMeetingLink — link format modes and disambiguation
+ *   6. updateSeriesNote — idempotent update with full mock vault
  */
 
 import { TFile } from 'obsidian';
@@ -13,6 +15,8 @@ import { App } from './__mocks__/obsidian';
 import {
 	extractSeriesTasks,
 	extractDecisionsFromSlot,
+	extractDateStrFromPath,
+	formatMeetingLink,
 	getOrCreateSeriesNote,
 	parseNoteDate,
 	updateSeriesNote,
@@ -156,11 +160,74 @@ describe('parseNoteDate', () => {
 		expect(d.getDate()).toBe(14);
 	});
 
+	it('falls back to folder path YYYY-MM-DD when filename has no date', () => {
+		const file = makeTFile('Meetings/2026-03-05/Team Standup.md', 0);
+		const d = parseNoteDate('No frontmatter here', file);
+		expect(d.getFullYear()).toBe(2026);
+		expect(d.getMonth()).toBe(2); // March
+		expect(d.getDate()).toBe(5);
+	});
+
 	it('falls back to mtime when no date available', () => {
 		const MTIME = new Date('2026-01-01').getTime();
 		const file = makeTFile('Meetings/untitled.md', MTIME);
 		const d = parseNoteDate('No date info', file);
 		expect(d.getTime()).toBe(MTIME);
+	});
+});
+
+// ─── extractDateStrFromPath ───────────────────────────────────────────────────
+
+describe('extractDateStrFromPath', () => {
+	it('extracts date from filename', () => {
+		const file = makeTFile('Meetings/2026-03-04 Standup.md', 0);
+		expect(extractDateStrFromPath(file)).toBe('2026-03-04');
+	});
+
+	it('extracts date from folder path when filename has no date', () => {
+		const file = makeTFile('Meetings/2026-03-05/Team Standup.md', 0);
+		expect(extractDateStrFromPath(file)).toBe('2026-03-05');
+	});
+
+	it('falls back to mtime-derived date when no date in path', () => {
+		const mtime = new Date('2026-06-15T00:00:00Z').getTime();
+		const file = makeTFile('Meetings/untitled.md', mtime);
+		const result = extractDateStrFromPath(file);
+		expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+	});
+});
+
+// ─── formatMeetingLink ────────────────────────────────────────────────────────
+
+describe('formatMeetingLink', () => {
+	it('date format: uses full path and date-only display', () => {
+		const file = makeTFile('Meetings/2026-03-04/1000 NFT ClearStar.md', 0);
+		const link = formatMeetingLink(file, 'date');
+		expect(link).toBe('[[Meetings/2026-03-04/1000 NFT ClearStar|2026-03-04]]');
+	});
+
+	it('date-title format: uses full path and date · title display', () => {
+		const file = makeTFile('Meetings/2026-03-04/1000 NFT ClearStar.md', 0);
+		const link = formatMeetingLink(file, 'date-title');
+		expect(link).toBe('[[Meetings/2026-03-04/1000 NFT ClearStar|2026-03-04 · 1000 NFT ClearStar]]');
+	});
+
+	it('two meetings with same title in different date folders produce distinct links', () => {
+		const f1 = makeTFile('Meetings/2026-03-04/1000 NFT ClearStar.md', 0);
+		const f2 = makeTFile('Meetings/2026-03-05/1000 NFT ClearStar.md', 0);
+		const l1 = formatMeetingLink(f1, 'date');
+		const l2 = formatMeetingLink(f2, 'date');
+		expect(l1).not.toBe(l2);
+		expect(l1).toContain('2026-03-04');
+		expect(l2).toContain('2026-03-05');
+		expect(l1).toContain('Meetings/2026-03-04/1000 NFT ClearStar');
+		expect(l2).toContain('Meetings/2026-03-05/1000 NFT ClearStar');
+	});
+
+	it('extracts date from filename when folder has no date', () => {
+		const file = makeTFile('Meetings/2026-04-01 Weekly Review.md', 0);
+		const link = formatMeetingLink(file, 'date');
+		expect(link).toBe('[[Meetings/2026-04-01 Weekly Review|2026-04-01]]');
 	});
 });
 
@@ -259,7 +326,7 @@ describe('updateSeriesNote', () => {
 		expect(updated).not.toContain('^series');
 	});
 
-	it('populates CB_SERIES_MEETINGS_INDEX with wikilinks', async () => {
+	it('populates CB_SERIES_MEETINGS_INDEX with wikilinks using date-title format', async () => {
 		const app = new App();
 		mockVault(app).writeFile(SERIES_PATH, makeSeriesSkeleton(), 500);
 
@@ -271,8 +338,8 @@ describe('updateSeriesNote', () => {
 		await updateSeriesNote(app as never, SERIES_PATH, 'ical:standup', 'Daily Standup', [f1, f2], SETTINGS, NOW);
 
 		const updated = mockVault(app).readByPath(SERIES_PATH) ?? '';
-		expect(updated).toContain('[[2026-01-15 Standup]]');
-		expect(updated).toContain('[[2026-01-08 Standup]]');
+		expect(updated).toContain('[[Meetings/2026-01-15 Standup|2026-01-15 · 2026-01-15 Standup]]');
+		expect(updated).toContain('[[Meetings/2026-01-08 Standup|2026-01-08 · 2026-01-08 Standup]]');
 	});
 
 	it('is idempotent — calling twice produces the same result', async () => {
