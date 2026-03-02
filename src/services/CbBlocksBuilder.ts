@@ -91,8 +91,12 @@ export async function buildCbBlocks(
 			const ctxResult = await contextService.buildContext({
 				seriesKey: event.seriesKey,
 				notesFolder,
-				maxLookback: 3,
-			});
+				maxLookback: settings.contextDecisionLookbackNotes ?? 10,
+				horizonDays: settings.contextDecisionHorizonDays ?? 14,
+				dropExpiredByDate: settings.contextDropExpiredDecisionsByDate ?? true,
+				stickyToken: settings.contextStickyToken ?? '!sticky',
+				debug: debugEnabled,
+			})
 			context = ctxResult.content;
 			trace(`CB_CONTEXT: ${ctxResult.scanned} notes scanned, ${ctxResult.sourcePaths.length} contributed`);
 		} catch (err) {
