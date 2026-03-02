@@ -8,10 +8,12 @@
  *   4. updateSeriesNote — idempotent update with full mock vault
  */
 
-import { App, TFile } from 'obsidian';
+import { TFile } from 'obsidian';
+import { App } from './__mocks__/obsidian';
 import {
 	extractSeriesTasks,
 	extractDecisionsFromSlot,
+	getOrCreateSeriesNote,
 	parseNoteDate,
 	updateSeriesNote,
 } from '../src/services/SeriesNoteService';
@@ -222,16 +224,16 @@ describe('updateSeriesNote', () => {
 		return [fm, taskLines, decisions].filter(Boolean).join('\n');
 	}
 
-	it('does nothing when series note does not exist', async () => {
+	it('creates series note when it does not exist (no longer bails)', async () => {
 		const app = new App();
-		// Don't create the series note — vault is empty
 		const file = makeTFile('Meetings/standup-1.md', 1000);
 		mockVault(app).writeFile(file.path, makeMeetingContent({ tasks: ['- [ ] Task ^series'] }), 1000);
 
-		// Should resolve without throwing
-		await expect(
-			updateSeriesNote(app as never, SERIES_PATH, 'Daily Standup', [file], SETTINGS, NOW),
-		).resolves.toBeUndefined();
+		await updateSeriesNote(app as never, SERIES_PATH, 'ical:standup', 'Daily Standup', [file], SETTINGS, NOW);
+
+		const content = mockVault(app).readByPath(SERIES_PATH);
+		expect(content).toBeDefined();
+		expect(content).toContain('CB_SERIES_ACTIONS');
 	});
 
 	it('populates CB_SERIES_ACTIONS with ^series tasks from meeting files', async () => {
@@ -249,7 +251,7 @@ describe('updateSeriesNote', () => {
 			1000,
 		);
 
-		await updateSeriesNote(app as never, SERIES_PATH, 'Daily Standup', [meetingFile], SETTINGS, NOW);
+		await updateSeriesNote(app as never, SERIES_PATH, 'ical:standup', 'Daily Standup', [meetingFile], SETTINGS, NOW);
 
 		const updated = mockVault(app).readByPath(SERIES_PATH) ?? '';
 		expect(updated).toContain('- [ ] Follow up with Bob');
@@ -266,7 +268,7 @@ describe('updateSeriesNote', () => {
 		mockVault(app).writeFile(f1.path, makeMeetingContent({ date: '2026-01-15T09:00:00Z' }), 2000);
 		mockVault(app).writeFile(f2.path, makeMeetingContent({ date: '2026-01-08T09:00:00Z' }), 1000);
 
-		await updateSeriesNote(app as never, SERIES_PATH, 'Daily Standup', [f1, f2], SETTINGS, NOW);
+		await updateSeriesNote(app as never, SERIES_PATH, 'ical:standup', 'Daily Standup', [f1, f2], SETTINGS, NOW);
 
 		const updated = mockVault(app).readByPath(SERIES_PATH) ?? '';
 		expect(updated).toContain('[[2026-01-15 Standup]]');
@@ -284,10 +286,10 @@ describe('updateSeriesNote', () => {
 			1000,
 		);
 
-		await updateSeriesNote(app as never, SERIES_PATH, 'Daily Standup', [meetingFile], SETTINGS, NOW);
+		await updateSeriesNote(app as never, SERIES_PATH, 'ical:standup', 'Daily Standup', [meetingFile], SETTINGS, NOW);
 		const afterFirst = mockVault(app).readByPath(SERIES_PATH) ?? '';
 
-		await updateSeriesNote(app as never, SERIES_PATH, 'Daily Standup', [meetingFile], SETTINGS, NOW);
+		await updateSeriesNote(app as never, SERIES_PATH, 'ical:standup', 'Daily Standup', [meetingFile], SETTINGS, NOW);
 		const afterSecond = mockVault(app).readByPath(SERIES_PATH) ?? '';
 
 		expect(afterSecond).toBe(afterFirst);
@@ -300,12 +302,12 @@ describe('updateSeriesNote', () => {
 		const meetingFile = makeTFile('Meetings/2026-01-15 Standup.md', 1000);
 		mockVault(app).writeFile(meetingFile.path, makeMeetingContent(), 1000);
 
-		await updateSeriesNote(app as never, SERIES_PATH, 'Daily Standup', [meetingFile], SETTINGS, NOW);
+		await updateSeriesNote(app as never, SERIES_PATH, 'ical:standup', 'Daily Standup', [meetingFile], SETTINGS, NOW);
 		const afterFirst = mockVault(app).readByPath(SERIES_PATH) ?? '';
 
 		// Spy on vault.modify to confirm it is NOT called on second pass
 		const modifySpy = jest.spyOn(app.vault, 'modify');
-		await updateSeriesNote(app as never, SERIES_PATH, 'Daily Standup', [meetingFile], SETTINGS, NOW);
+		await updateSeriesNote(app as never, SERIES_PATH, 'ical:standup', 'Daily Standup', [meetingFile], SETTINGS, NOW);
 
 		expect(modifySpy).not.toHaveBeenCalled();
 		modifySpy.mockRestore();
@@ -320,10 +322,45 @@ describe('updateSeriesNote', () => {
 		const meetingFile = makeTFile('Meetings/2026-01-15 Standup.md', 1000);
 		mockVault(app).writeFile(meetingFile.path, makeMeetingContent(), 1000);
 
-		await updateSeriesNote(app as never, SERIES_PATH, 'Daily Standup', [meetingFile], SETTINGS, NOW);
+		await updateSeriesNote(app as never, SERIES_PATH, 'ical:standup', 'Daily Standup', [meetingFile], SETTINGS, NOW);
 
 		const updated = mockVault(app).readByPath(SERIES_PATH) ?? '';
 		expect(updated).toContain('Daily Standup');
 		expect(updated).toContain('Total meetings:');
+	});
+});
+
+describe('getOrCreateSeriesNote', () => {
+	const SETTINGS = { ...DEFAULT_SETTINGS, seriesTemplatePath: '' };
+
+	it('creates series note when it does not exist', async () => {
+		const app = new App();
+		const path = 'Meetings/_series/standup.md';
+		const file = await getOrCreateSeriesNote(app as never, path, 'standup', 'Daily Standup', SETTINGS);
+		expect(file).toBeDefined();
+		const content = mockVault(app).readByPath(path);
+		expect(content).toBeDefined();
+		expect(content).toContain('CB_SERIES_ACTIONS');
+	});
+
+	it('returns existing file without recreating', async () => {
+		const app = new App();
+		const path = 'Meetings/_series/standup.md';
+		mockVault(app).writeFile(path, '# Existing Content');
+		const file = await getOrCreateSeriesNote(app as never, path, 'standup', 'Daily Standup', SETTINGS);
+		const content = mockVault(app).readByPath(path);
+		expect(content).toBe('# Existing Content');
+		expect(file.path).toBe(path);
+	});
+
+	it('uses DEFAULT_SERIES_TEMPLATE when no template path configured', async () => {
+		const app = new App();
+		const path = 'Meetings/_series/new-series.md';
+		await getOrCreateSeriesNote(app as never, path, 'new-series', 'New Series', SETTINGS);
+		const content = mockVault(app).readByPath(path) ?? '';
+		expect(content).toContain('CB_SERIES_ACTIONS');
+		expect(content).toContain('CB_SERIES_DECISIONS');
+		expect(content).toContain('CB_SERIES_MEETINGS_INDEX');
+		expect(content).toContain('CB_SERIES_DIAGNOSTICS');
 	});
 });
