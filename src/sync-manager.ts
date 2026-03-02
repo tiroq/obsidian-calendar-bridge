@@ -43,7 +43,6 @@ import {
 	generateSeriesAutogen,
 	generateSeriesPageContent,
 	getSeriesPath,
-	getSeriesPagePathByKey,
 	groupBySeries,
 	groupBySeriesNormalized,
 	wrapAutogen,
@@ -597,7 +596,7 @@ export async function runSync(
 	// ── Second pass: update series notes with aggregated content ──────────────
 	const normalizedSeriesMap = groupBySeriesNormalized(filteredEvents);
 	for (const [seriesKey, series] of normalizedSeriesMap) {
-		const seriesNotePath = getSeriesPagePathByKey(series.seriesName, { ...settings, seriesFolder });
+		const seriesNotePath = getSeriesPath(series.seriesName, { ...settings, seriesFolder });
 		try {
 			const allFiles = app.vault.getFiles ? app.vault.getFiles() : [];
 			const meetingFiles: TFile[] = [];
@@ -608,7 +607,7 @@ export async function runSync(
 					if (fc.includes(`series_key: ${seriesKey}`)) meetingFiles.push(file);
 				} catch { /* skip unreadable */ }
 			}
-			await updateSeriesNote(app, seriesNotePath, series.seriesName, meetingFiles, settings, now);
+			await updateSeriesNote(app, seriesNotePath, series.seriesKey, series.seriesName, meetingFiles, settings, now);
 			console.log(`[CalendarBridge] SERIES_NOTES_UPDATE — "${series.seriesName}" → ${seriesNotePath}`);
 		} catch (err) {
 			result.errors.push(`Failed to update series note "${series.seriesName}": ${(err as Error).message}`);

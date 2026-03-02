@@ -16,6 +16,8 @@
 import { App, TFile } from 'obsidian';
 import { CB_SERIES_SLOTS, CbSeriesSlot, PluginSettings } from '../types';
 import { injectBlocks, extractSlotContent } from './TemplateService';
+import { resolveSeriesTemplate, applySeriesVariables } from '../utils/TemplateResolver';
+import { ensureSeriesBlocksExist } from '../utils/SeriesTemplate';
 import {
 	filterDecisions,
 	ExtractedDecision,
@@ -37,17 +39,13 @@ import {
 export async function updateSeriesNote(
 	app: App,
 	seriesNotePath: string,
+	seriesKey: string,
 	seriesName: string,
 	meetingFiles: TFile[],
 	settings: PluginSettings,
 	now: Date = new Date(),
 ): Promise<void> {
-	const seriesFile = app.vault.getAbstractFileByPath(seriesNotePath);
-	if (!(seriesFile instanceof TFile)) {
-		// Series note doesn't exist yet — nothing to update.
-		// (It must be created first by series-manager; this service only updates.)
-		return;
-	}
+	const seriesFile = await getOrCreateSeriesNote(app, seriesNotePath, seriesKey, seriesName, settings);
 
 	const existingContent = await app.vault.read(seriesFile);
 
@@ -147,6 +145,36 @@ export async function updateSeriesNote(
 	if (updated !== existingContent) {
 		await app.vault.modify(seriesFile, updated);
 	}
+}
+
+export async function getOrCreateSeriesNote(
+	app: App,
+	seriesNotePath: string,
+	seriesKey: string,
+	seriesName: string,
+	settings: PluginSettings,
+): Promise<TFile> {
+	const existing = app.vault.getAbstractFileByPath(seriesNotePath);
+	if (existing instanceof TFile) {
+		return existing;
+	}
+
+	const template = await resolveSeriesTemplate(app, settings);
+	const contentWithVars = applySeriesVariables(template, {
+		seriesKey,
+		seriesName,
+		meetingsFolder: settings.meetingsRoot,
+	});
+	const content = ensureSeriesBlocksExist(contentWithVars);
+
+	const parentPath = seriesNotePath.split('/').slice(0, -1).join('/');
+	if (parentPath && !app.vault.getAbstractFileByPath(parentPath)) {
+		await app.vault.createFolder(parentPath);
+	}
+
+	const created = await app.vault.create(seriesNotePath, content);
+	console.log('[CalendarBridge] Created series note:', seriesNotePath, '(template:', settings.seriesTemplatePath || 'default', ')');
+	return created;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
