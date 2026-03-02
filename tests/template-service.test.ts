@@ -87,10 +87,10 @@ describe('parseSlots', () => {
 		expect(missing).toEqual([...CB_SLOTS]);
 	});
 
-	it('finds all 9 slots in a full template', () => {
+	it('finds all 10 slots in a full template', () => {
 		const template = CB_SLOTS.map(s => `{{${s}}}`).join('\n');
 		const { found, missing } = parseSlots(template);
-		expect(found).toHaveLength(9);
+		expect(found).toHaveLength(10);
 		expect(missing).toHaveLength(0);
 	});
 

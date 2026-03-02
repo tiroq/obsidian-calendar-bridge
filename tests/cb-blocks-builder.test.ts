@@ -2,8 +2,8 @@
  * Unit tests for CbBlocksBuilder.
  *
  * Tests that buildCbBlocks():
- *   1. Returns all 9 CB slots with string values (never undefined)
- *   2. Populates CB_CONTEXT and CB_ACTIONS for recurring events
+ *   1. Returns all 10 CB slots with string values (never undefined)
+ *   2. CB_CONTEXT / CB_ACTIONS for recurring events redirect to the series note
  *   3. Returns empty strings for CB_CONTEXT / CB_ACTIONS for non-recurring events
  *   4. CB_FM contains expected frontmatter fields
  *   5. CB_HEADER contains the event title
@@ -79,10 +79,10 @@ function makeParams(
 	};
 }
 
-// ─── Core contract: all 9 slots always present ────────────────────────────────
+// ─── Core contract: all 10 slots always present ────────────────────────────────────
 
 describe('buildCbBlocks — slot completeness', () => {
-	it('returns all 9 CB slots as strings (never undefined)', async () => {
+	it('returns all 10 CB slots as strings (never undefined)', async () => {
 		const app = new App();
 		const event = makeEvent();
 		const settings = makeSettings();
@@ -93,7 +93,7 @@ describe('buildCbBlocks — slot completeness', () => {
 		}
 	});
 
-	it('returns exactly the 9 expected slots', async () => {
+	it('returns exactly the 10 expected slots', async () => {
 		const app = new App();
 		const event = makeEvent();
 		const settings = makeSettings();
@@ -103,11 +103,12 @@ describe('buildCbBlocks — slot completeness', () => {
 			'CB_FM', 'CB_HEADER', 'CB_LINKS',
 			'CB_CONTEXT', 'CB_ACTIONS',
 			'CB_BODY', 'CB_DECISIONS', 'CB_DIAGNOSTICS', 'CB_FOOTER',
+			'CB_SERIES_LINK',
 		];
 		for (const slot of expectedSlots) {
 			expect(blocks).toHaveProperty(slot);
 		}
-		expect(Object.keys(blocks)).toHaveLength(9);
+		expect(Object.keys(blocks)).toHaveLength(10);
 	});
 });
 
@@ -222,104 +223,43 @@ describe('buildCbBlocks — CB_CONTEXT / CB_ACTIONS (non-recurring)', () => {
 	});
 });
 
-// ─── CB_CONTEXT / CB_ACTIONS — recurring (mock services) ─────────────────────
+// ─── CB_CONTEXT / CB_ACTIONS — recurring (redirect) ─────────────────────────
 
-describe('buildCbBlocks — CB_CONTEXT / CB_ACTIONS (recurring)', () => {
-	it('CB_CONTEXT is populated from ContextService for recurring events', async () => {
+describe('buildCbBlocks — CB_CONTEXT / CB_ACTIONS (recurring, redirect)', () => {
+	it('CB_CONTEXT is a redirect blockquote when seriesPagePath is provided', async () => {
 		const app = new App();
 		const event = makeRecurringEvent();
+		const params = makeParams(event, makeSettings(), app);
+		params.seriesPagePath = 'Meetings/_series/daily-standup.md';
 
-		const mockContextService = {
-			buildContext: jest.fn().mockResolvedValue({
-				content: 'Previous meeting notes here',
-				scanned: 1,
-				sourcePaths: ['Meetings/prev.md'],
-			}),
-			clearCache: jest.fn(),
-		} as unknown as ContextService;
-
-		const { CB_CONTEXT } = await buildCbBlocks(
-			makeParams(event, makeSettings(), app, { contextService: mockContextService }),
-		);
-		expect(CB_CONTEXT).toBe('Previous meeting notes here');
-		expect(mockContextService.buildContext).toHaveBeenCalledWith({
-			seriesKey: 'series-key-standup',
-			notesFolder: 'Meetings',
-			maxLookback: 10,
-			horizonDays: 14,
-			dropExpiredByDate: true,
-			stickyToken: '!sticky',
-			debug: false,
-		});
+		const { CB_CONTEXT } = await buildCbBlocks(params);
+		expect(CB_CONTEXT).toMatch(/> Aggregated context is in the series note:/);
+		expect(CB_CONTEXT).toContain('[[Meetings/_series/daily-standup.md]]');
 	});
 
-	it('CB_ACTIONS is populated from ActionAggregationService for recurring events', async () => {
+	it('CB_ACTIONS is a redirect blockquote when seriesPagePath is provided', async () => {
 		const app = new App();
 		const event = makeRecurringEvent();
+		const params = makeParams(event, makeSettings(), app);
+		params.seriesPagePath = 'Meetings/_series/daily-standup.md';
 
-		const mockActionService = {
-			aggregateActions: jest.fn().mockResolvedValue({
-				content: '- [ ] Follow up on roadmap\n- [ ] Schedule demo',
-				actions: ['Follow up on roadmap', 'Schedule demo'],
-				scanned: 2,
-			}),
-			clearCache: jest.fn(),
-		} as unknown as ActionAggregationService;
-
-		const { CB_ACTIONS } = await buildCbBlocks(
-			makeParams(event, makeSettings(), app, { actionService: mockActionService }),
-		);
-		expect(CB_ACTIONS).toBe('- [ ] Follow up on roadmap\n- [ ] Schedule demo');
-		expect(mockActionService.aggregateActions).toHaveBeenCalledWith({
-			seriesKey: 'series-key-standup',
-			notesFolder: 'Meetings',
-			maxLookback: 5,
-		});
+		const { CB_ACTIONS } = await buildCbBlocks(params);
+		expect(CB_ACTIONS).toMatch(/> Open series actions are tracked in the series note:/);
+		expect(CB_ACTIONS).toContain('[[Meetings/_series/daily-standup.md]]');
 	});
 
-	it('CB_CONTEXT is empty string when ContextService throws', async () => {
+	it('CB_CONTEXT falls back to generic redirect when no seriesPagePath', async () => {
 		const app = new App();
 		const event = makeRecurringEvent();
-
-		const mockContextService = {
-			buildContext: jest.fn().mockRejectedValue(new Error('Service unavailable')),
-			clearCache: jest.fn(),
-		} as unknown as ContextService;
-
-		const { CB_CONTEXT } = await buildCbBlocks(
-			makeParams(event, makeSettings(), app, { contextService: mockContextService }),
-		);
-		expect(CB_CONTEXT).toBe('');
+		const { CB_CONTEXT } = await buildCbBlocks(makeParams(event, makeSettings(), app));
+		expect(CB_CONTEXT).toMatch(/> See the series note/);
 	});
 
-	it('CB_ACTIONS is empty string when ActionAggregationService throws', async () => {
+	it('CB_ACTIONS falls back to generic redirect when no seriesPagePath', async () => {
 		const app = new App();
 		const event = makeRecurringEvent();
-
-		const mockActionService = {
-			aggregateActions: jest.fn().mockRejectedValue(new Error('Service unavailable')),
-			clearCache: jest.fn(),
-		} as unknown as ActionAggregationService;
-
-		const { CB_ACTIONS } = await buildCbBlocks(
-			makeParams(event, makeSettings(), app, { actionService: mockActionService }),
-		);
-		expect(CB_ACTIONS).toBe('');
-	});
-
-	it('CB_CONTEXT is empty string when ContextService returns empty content', async () => {
-		const app = new App();
-		const event = makeRecurringEvent();
-
-		const mockContextService = {
-			buildContext: jest.fn().mockResolvedValue({ content: '', scanned: 0, sourcePaths: [] }),
-			clearCache: jest.fn(),
-		} as unknown as ContextService;
-
-		const { CB_CONTEXT } = await buildCbBlocks(
-			makeParams(event, makeSettings(), app, { contextService: mockContextService }),
-		);
-		expect(CB_CONTEXT).toBe('');
+		const { CB_ACTIONS } = await buildCbBlocks(makeParams(event, makeSettings(), app));
+		expect(CB_ACTIONS).toMatch(/> See the series note/);
 	});
 });
 
@@ -364,5 +304,32 @@ describe('buildCbBlocks — CB_DIAGNOSTICS', () => {
 		);
 		expect(CB_DIAGNOSTICS).toContain('CB Diagnostics');
 		expect(CB_DIAGNOSTICS).toContain('Debug Test Meeting');
+	});
+});
+
+// ─── CB_SERIES_LINK ──────────────────────────────────────────────────────────
+
+describe('buildCbBlocks — CB_SERIES_LINK', () => {
+	it('CB_SERIES_LINK contains wikilink for recurring events with seriesPagePath', async () => {
+		const app = new App();
+		const event = makeRecurringEvent();
+		const params = makeParams(event, makeSettings(), app);
+		params.seriesPagePath = 'Meetings/_series/daily-standup.md';
+
+		const { CB_SERIES_LINK } = await buildCbBlocks(params);
+		expect(CB_SERIES_LINK).toBe('Related series: [[Meetings/_series/daily-standup.md]]');
+	});
+
+	it('CB_SERIES_LINK is empty for non-recurring events', async () => {
+		const app = new App();
+		const { CB_SERIES_LINK } = await buildCbBlocks(makeParams(makeEvent(), makeSettings(), app));
+		expect(CB_SERIES_LINK).toBe('');
+	});
+
+	it('CB_SERIES_LINK is empty for recurring events without seriesPagePath', async () => {
+		const app = new App();
+		const event = makeRecurringEvent();
+		const { CB_SERIES_LINK } = await buildCbBlocks(makeParams(event, makeSettings(), app));
+		expect(CB_SERIES_LINK).toBe('');
 	});
 });
