@@ -488,6 +488,7 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 		this.renderPathsSection(containerEl);
 		this.renderFormatSection(containerEl);
 		this.renderFeaturesSection(containerEl);
+		this.renderSeriesNoteSection(containerEl);
 		this.renderPrivacySection(containerEl);
 		this.renderActionsSection(containerEl);
 	}
@@ -1242,6 +1243,59 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 			get: () => this.plugin.settings.contextStickyToken,
 			set: async v => {
 				this.plugin.settings.contextStickyToken = v.trim() || '!sticky';
+				await this.plugin.saveSettings();
+			},
+		});
+	}
+
+	// ─── Series note aggregation settings ──────────────────────────────────────
+
+	private renderSeriesNoteSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Series Note Aggregation').setHeading();
+
+		this.addTextSetting(containerEl, {
+			name: 'Series action marker',
+			desc: 'Block-reference tag that marks a task for aggregation into the series note. Add this tag to any task in a meeting note.',
+			placeholder: '^series',
+			get: () => this.plugin.settings.seriesActionMarker,
+			set: async v => {
+				this.plugin.settings.seriesActionMarker = v.trim() || '^series';
+				await this.plugin.saveSettings();
+			},
+		});
+
+		this.addNumericSetting(containerEl, {
+			name: 'Series decision horizon (days)',
+			desc: 'Decisions from notes older than this many days are excluded from the series note (unless sticky).',
+			min: 1,
+			max: 365,
+			defaultVal: 30,
+			get: () => this.plugin.settings.seriesDecisionHorizonDays,
+			set: async v => {
+				this.plugin.settings.seriesDecisionHorizonDays = Math.max(1, Math.min(365, v));
+				await this.plugin.saveSettings();
+			},
+		});
+
+		this.addNumericSetting(containerEl, {
+			name: 'Series decision lookback notes',
+			desc: 'Number of previous meeting notes to scan when building the series decisions block.',
+			min: 1,
+			max: 100,
+			defaultVal: 20,
+			get: () => this.plugin.settings.seriesDecisionLookbackNotes,
+			set: async v => {
+				this.plugin.settings.seriesDecisionLookbackNotes = Math.max(1, Math.min(100, v));
+				await this.plugin.saveSettings();
+			},
+		});
+
+		this.addToggleSetting(containerEl, {
+			name: 'Auto-expire stale series decisions',
+			desc: 'When enabled, decisions with a past embedded date are excluded from the series note.',
+			get: () => this.plugin.settings.seriesDropExpiredDecisionsByDate,
+			set: async v => {
+				this.plugin.settings.seriesDropExpiredDecisionsByDate = v;
 				await this.plugin.saveSettings();
 			},
 		});
