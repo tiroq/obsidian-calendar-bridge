@@ -1199,6 +1199,52 @@ export class CalendarBridgeSettingsTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 			},
 		});
+		this.addToggleSetting(containerEl, {
+			name: 'Auto-expire stale decisions in context',
+			desc: 'When enabled, decisions with a past embedded date are excluded from CB_CONTEXT.',
+			get: () => this.plugin.settings.contextDropExpiredDecisionsByDate,
+			set: async v => {
+				this.plugin.settings.contextDropExpiredDecisionsByDate = v;
+				await this.plugin.saveSettings();
+			},
+		});
+
+		this.addNumericSetting(containerEl, {
+			name: 'Decision horizon (days)',
+			desc: 'Decisions from notes older than this many days are excluded from CB_CONTEXT (unless sticky).',
+			min: 1,
+			max: 365,
+			defaultVal: 14,
+			get: () => this.plugin.settings.contextDecisionHorizonDays,
+			set: async v => {
+				this.plugin.settings.contextDecisionHorizonDays = Math.max(1, Math.min(365, v));
+				await this.plugin.saveSettings();
+			},
+		});
+
+		this.addNumericSetting(containerEl, {
+			name: 'Context lookback notes',
+			desc: 'Number of previous meeting notes to scan when building CB_CONTEXT.',
+			min: 1,
+			max: 50,
+			defaultVal: 10,
+			get: () => this.plugin.settings.contextDecisionLookbackNotes,
+			set: async v => {
+				this.plugin.settings.contextDecisionLookbackNotes = Math.max(1, Math.min(50, v));
+				await this.plugin.saveSettings();
+			},
+		});
+
+		this.addTextSetting(containerEl, {
+			name: 'Sticky decision token',
+			desc: 'Decisions containing this token are always included in CB_CONTEXT regardless of age. Token is hidden in rendered output.',
+			placeholder: '!sticky',
+			get: () => this.plugin.settings.contextStickyToken,
+			set: async v => {
+				this.plugin.settings.contextStickyToken = v.trim() || '!sticky';
+				await this.plugin.saveSettings();
+			},
+		});
 	}
 
 	// ─── Privacy ───────────────────────────────────────────────────────────────
