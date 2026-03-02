@@ -269,6 +269,7 @@ export interface PluginSettings {
 	seriesDecisionHorizonDays: number;
 	seriesDecisionLookbackNotes: number;
 	seriesDropExpiredDecisionsByDate: boolean;
+	seriesTemplatePath: string;
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -313,6 +314,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	seriesDecisionHorizonDays: 14,
 	seriesDecisionLookbackNotes: 30,
 	seriesDropExpiredDecisionsByDate: true,
+	seriesTemplatePath: '',
 };
 
 // ─── Series slot types ────────────────────────────────────────────────────────
