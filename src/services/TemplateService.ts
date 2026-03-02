@@ -56,12 +56,31 @@ export function cbEnd(slot: CbSlot): string {
  * CB_FM is special: no HTML markers — rendered as a YAML frontmatter fence.
  * All other slots: wrapped with <!-- CB:BEGIN/END --> markers.
  */
+
+/**
+ * Strip an existing CB wrapper for `slot` from `body`, returning only the inner content.
+ * This prevents double-wrapping when upstream accidentally passes already-wrapped content.
+ */
+function stripExistingCbWrapper(slot: CbSlot, body: string): string {
+	const beginRe = new RegExp(`^\\s*<!--\\s*CB:BEGIN\\s+${slot}\\s*-->\\s*\\n?`, 'mg');
+	const endRe   = new RegExp(`\\n?\\s*<!--\\s*CB:END\\s+${slot}\\s*-->\\s*$`, 'mg');
+	const hasBegin = beginRe.test(body);
+	const hasEnd   = endRe.test(body);
+	if (!hasBegin && !hasEnd) return body;
+	// Use global replace so ALL occurrences are stripped (handles nested/duplicate markers)
+	return body
+		.replace(new RegExp(`^\\s*<!--\\s*CB:BEGIN\\s+${slot}\\s*-->\\s*\\n?`, 'mg'), '')
+		.replace(new RegExp(`\\n?\\s*<!--\\s*CB:END\\s+${slot}\\s*-->\\s*$`, 'mg'), '')
+		.trim();
+}
 export function wrapSlot(slot: CbSlot, content: string): string {
 	if (slot === 'CB_FM') {
 		// Frontmatter must be a pure YAML fence — no HTML markers.
 		return `---\n${content.trim()}\n---`;
 	}
-	return `${cbBegin(slot)}\n${content}\n${cbEnd(slot)}`;
+	// Strip any pre-existing wrapper for this slot so we never produce nested markers.
+	const clean = stripExistingCbWrapper(slot, content);
+	return `${cbBegin(slot)}\n${clean}\n${cbEnd(slot)}`;
 }
 
 // ─── Parse result ──────────────────────────────────────────────────────────
@@ -152,8 +171,11 @@ export function injectBlocks(
 			// Mode 1: replace template token
 			result = result.replace(new RegExp(`\\{\\{${slot}\\}\\}`, 'g'), wrapped);
 		} else if (blockRe.test(result)) {
-			// Mode 2: replace existing CB block (idempotent)
-			result = result.replace(cbBlockRe(slot), wrapped);
+			// Mode 2: strip ALL existing CB blocks for this slot (handles nested/corrupted markers),
+			// then re-inject the fresh wrapped block in place of the first match position.
+			// We do this by stripping all markers, then appending the fresh block.
+			// But to preserve placement (not move to end), use a greedy regex to find outer boundary.
+			result = result.replace(cbBlockReGreedy(slot), wrapped);
 		} else if (slot === 'CB_DIAGNOSTICS' && opts.debugEnabled) {
 			// Special case: always append diagnostics when debug enabled
 			result = result.trimEnd() + `\n\n${wrapped}\n`;
@@ -172,6 +194,16 @@ const cbFmRe = /^---\n[\s\S]*?\n---\n?/;
 function cbBlockRe(slot: CbSlot): RegExp {
 	return new RegExp(
 		`<!--\\s*CB:BEGIN\\s+${slot}\\s*-->[\\s\\S]*?<!--\\s*CB:END\\s+${slot}\\s*-->`,
+		'g',
+	);
+}
+
+/** Greedy version of cbBlockRe — matches from the FIRST BEGIN to the LAST END for a slot.
+ * Use in Mode 2 of injectBlocks to handle corrupted notes with nested/duplicate markers.
+ */
+function cbBlockReGreedy(slot: CbSlot): RegExp {
+	return new RegExp(
+		`<!--\\s*CB:BEGIN\\s+${slot}\\s*-->[\\s\\S]*<!--\\s*CB:END\\s+${slot}\\s*-->`,
 		'g',
 	);
 }

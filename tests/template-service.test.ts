@@ -32,6 +32,44 @@ describe('cbBegin / cbEnd', () => {
 	});
 });
 
+// ─── wrapSlot idempotency ────────────────────────────────────────────────────
+
+describe('wrapSlot — nested marker prevention', () => {
+	it('does not nest markers when body already contains a CB wrapper for the same slot', () => {
+		// Simulate upstream passing pre-wrapped content
+		const preWrapped = '<!-- CB:BEGIN CB_ACTIONS -->\n- [ ] Task\n<!-- CB:END CB_ACTIONS -->';
+		const result = wrapSlot('CB_ACTIONS', preWrapped);
+		const beginCount = (result.match(/<!-- CB:BEGIN CB_ACTIONS -->/g) ?? []).length;
+		const endCount   = (result.match(/<!-- CB:END CB_ACTIONS -->/g) ?? []).length;
+		expect(beginCount).toBe(1);
+		expect(endCount).toBe(1);
+		// Inner content is preserved
+		expect(result).toContain('- [ ] Task');
+	});
+
+	it('second call to wrapSlot on already-wrapped output still produces one wrapper pair', () => {
+		const once = wrapSlot('CB_ACTIONS', '- [ ] Task');
+		const twice = wrapSlot('CB_ACTIONS', once);
+		const beginCount = (twice.match(/<!-- CB:BEGIN CB_ACTIONS -->/g) ?? []).length;
+		expect(beginCount).toBe(1);
+	});
+
+	it('does not strip wrappers for a different slot', () => {
+		// CB_BODY wrapper in body should be left alone when wrapping CB_ACTIONS
+		const body = '<!-- CB:BEGIN CB_BODY -->\nsome body\n<!-- CB:END CB_BODY -->';
+		const result = wrapSlot('CB_ACTIONS', body);
+		expect(result).toContain('<!-- CB:BEGIN CB_BODY -->');
+		expect(result).toContain('<!-- CB:BEGIN CB_ACTIONS -->');
+	});
+
+	it('CB_FM is never wrapped in HTML markers even if called twice', () => {
+		const once = wrapSlot('CB_FM', 'type: meeting');
+		expect(once).not.toContain('<!--');
+		const twice = wrapSlot('CB_FM', once);
+		expect(twice).not.toContain('<!--');
+	});
+});
+
 // ─── parseSlots ───────────────────────────────────────────────────────────
 
 describe('parseSlots', () => {
@@ -308,6 +346,38 @@ describe('CB_FM — frontmatter injection', () => {
 		const template = '{{CB_FM}}\n\n# Title';
 		const result = injectBlocks(template, { CB_FM: 'type: meeting' });
 		expect(result).not.toContain('{{CB_FM}}');
+	});
+});
+
+// ─── injectBlocks — nested marker prevention (integration) ────────────────────
+
+describe('injectBlocks — nested marker prevention', () => {
+	it('double injection produces exactly one CB:BEGIN/END pair per slot', () => {
+		const template = '{{CB_ACTIONS}}';
+		const once = injectBlocks(template, { CB_ACTIONS: '- [ ] Task' });
+		const twice = injectBlocks(once, { CB_ACTIONS: '- [ ] Task' });
+		const beginCount = (twice.match(/<!-- CB:BEGIN CB_ACTIONS -->/g) ?? []).length;
+		const endCount   = (twice.match(/<!-- CB:END CB_ACTIONS -->/g) ?? []).length;
+		expect(beginCount).toBe(1);
+		expect(endCount).toBe(1);
+	});
+
+	it('injecting into a note that already has corrupted nested markers produces clean output', () => {
+		// Simulate a note with nested markers from a previous bug
+		const corrupted = [
+			'<!-- CB:BEGIN CB_ACTIONS -->',
+			'<!-- CB:BEGIN CB_ACTIONS -->',
+			'- [ ] Old task',
+			'<!-- CB:END CB_ACTIONS -->',
+			'<!-- CB:END CB_ACTIONS -->',
+		].join('\n');
+		const result = injectBlocks(corrupted, { CB_ACTIONS: '- [ ] New task' });
+		const beginCount = (result.match(/<!-- CB:BEGIN CB_ACTIONS -->/g) ?? []).length;
+		const endCount   = (result.match(/<!-- CB:END CB_ACTIONS -->/g) ?? []).length;
+		expect(beginCount).toBe(1);
+		expect(endCount).toBe(1);
+		expect(result).toContain('New task');
+		expect(result).not.toContain('Old task');
 	});
 });
 
