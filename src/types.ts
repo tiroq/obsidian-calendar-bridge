@@ -258,6 +258,11 @@ export interface PluginSettings {
 	panelExcludeTitles: string;       // comma-separated keywords
 	panelIncludeTitles: string;       // comma-separated keywords
 	panelTitleRegexMode: boolean;
+	// Context decision filtering
+	contextDecisionHorizonDays: number;
+	contextDecisionLookbackNotes: number;
+	contextDropExpiredDecisionsByDate: boolean;
+	contextStickyToken: string;
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -292,6 +297,11 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	panelExcludeTitles: '',
 	panelIncludeTitles: '',
 	panelTitleRegexMode: false,
+	// Context decision filtering defaults
+	contextDecisionHorizonDays: 14,
+	contextDecisionLookbackNotes: 10,
+	contextDropExpiredDecisionsByDate: true,
+	contextStickyToken: '!sticky',
 };
 
 // ─── Legacy compat shim (kept so existing tests import still work) ────────────
