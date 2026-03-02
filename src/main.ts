@@ -278,8 +278,9 @@ export default class CalendarBridgePlugin
 
 	/** Open the plugin settings tab (required by CalendarBridgePanelPlugin). */
 	openSettings(): void {
-		// @ts-ignore — Obsidian's setting tab opening is not typed in the public API
-		(this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting?.openTabById(this.manifest.id);
+		const s = (this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting;
+		s?.open();
+		s?.openTabById(this.manifest.id);
 	}
 
 	// ── Series task promotion ──────────────────────────────────────────────────
