@@ -245,7 +245,11 @@ describe('buildCbBlocks — CB_CONTEXT / CB_ACTIONS (recurring)', () => {
 		expect(mockContextService.buildContext).toHaveBeenCalledWith({
 			seriesKey: 'series-key-standup',
 			notesFolder: 'Meetings',
-			maxLookback: 3,
+			maxLookback: 10,
+			horizonDays: 14,
+			dropExpiredByDate: true,
+			stickyToken: '!sticky',
+			debug: false,
 		});
 	});
 

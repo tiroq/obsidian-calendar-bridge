@@ -1,5 +1,5 @@
 import { buildSyncPlan } from '../src/services/PlanningService';
-import { NormalizedEvent } from '../src/types';
+import { NormalizedEvent, DEFAULT_SETTINGS } from '../src/types';
 import { App } from 'obsidian';
 
 // ─── Vault helper using the obsidian mock ───────────────────────────────────────────────
@@ -38,38 +38,11 @@ function makeEvent(overrides: Partial<NormalizedEvent> = {}): NormalizedEvent {
 
 function makeSettings() {
 	return {
+		...DEFAULT_SETTINGS,
 		meetingsRoot:  'Meetings',
 		seriesRoot:    'Meetings/_series',
 		notesFolder:   'Meetings',
 		seriesFolder:  'Meetings/_series',
-		dateFolderFormat: 'YYYY-MM-DD',
-		fileNameFormat: '{time} [{series}] {title}',
-		timezoneDefault: '',
-		sources: [],
-		horizonDays: 3,
-		autoSyncIntervalMinutes: 60,
-		syncOnStartup: true,
-		templatePath: '',
-		templateRoutes: [],
-		contactsFolder: '',
-		enableSeriesPages: true,
-		enablePrevNextLinks: true,
-		writeStateInVault: false,
-		dateFormat: 'YYYY-MM-DD',
-		timeFormat: 'HH:mm',
-		redactionMode: false,
-		stateVersion: 1,
-		panelHorizonDays: 5,
-		panelIncludeAllDay: true,
-		panelIncludeDeclined: false,
-		panelOnlyWithAttendees: false,
-		panelSkipShorterThanMin: 0,
-		panelExtractConferenceLinks: true,
-		panelExtractAttendees: true,
-		panelExtractLocation: true,
-		panelExcludeTitles: '',
-		panelIncludeTitles: '',
-		panelTitleRegexMode: false,
 	};
 }
 

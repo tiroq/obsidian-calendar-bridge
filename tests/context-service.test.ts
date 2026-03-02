@@ -240,3 +240,122 @@ describe('ContextService', () => {
 		expect(result.content).toContain('\n\n');
 	});
 });
+
+
+// ─── ContextService — Decision Filtering Integration ─────────────────────────
+
+describe('ContextService — decision filtering', () => {
+	const FOLDER2 = 'Meetings';
+	const SERIES2 = 'gcal:filtertest';
+
+	/**
+	 * Build a note with series_key and CB_DECISIONS content.
+	 * The 'start:' frontmatter field is used as the source date.
+	 */
+	function addDecisionNote(
+		app: App,
+		filename: string,
+		decisions: string[],
+		start: string,  // ISO date string for frontmatter start:
+		mtime = Date.now(),
+	): void {
+		const decisionsBlock = [
+			'<!-- CB:BEGIN CB_DECISIONS -->',
+			...decisions,
+			'<!-- CB:END CB_DECISIONS -->',
+		].join('\n');
+		const content = [
+			'---',
+			`series_key: ${SERIES2}`,
+			`start: ${start}`,
+			'---',
+			decisionsBlock,
+		].join('\n');
+		(app.vault as unknown as { writeFile: (p: string, c: string, m: number) => void })
+			.writeFile(`${FOLDER2}/${filename}`, content, mtime);
+	}
+
+	it('includes decisions within the horizon', async () => {
+		const app = makeApp();
+		const now = new Date('2026-03-02');
+		addDecisionNote(app, 'recent.md', ['- Use TypeScript'], '2026-02-25', 1000);
+
+		const svc = new ContextService(app);
+		const result = await svc.buildContext({
+			seriesKey: SERIES2, notesFolder: FOLDER2,
+			horizonDays: 14, dropExpiredByDate: true,
+			stickyToken: '!sticky', now,
+		});
+		expect(result.content).toContain('Use TypeScript');
+	});
+
+	it('excludes decisions older than horizonDays', async () => {
+		const app = makeApp();
+		const now = new Date('2026-03-02');
+		addDecisionNote(app, 'old.md', ['- Use Redis'], '2026-01-01', 1000); // ~60 days old
+
+		const svc = new ContextService(app);
+		const result = await svc.buildContext({
+			seriesKey: SERIES2, notesFolder: FOLDER2,
+			horizonDays: 14, dropExpiredByDate: true,
+			stickyToken: '!sticky', now,
+		});
+		expect(result.content).not.toContain('Use Redis');
+	});
+
+	it('always includes sticky decisions even if very old', async () => {
+		const app = makeApp();
+		const now = new Date('2026-03-02');
+		addDecisionNote(app, 'ancient.md', ['- Keep API frozen !sticky'], '2025-01-01', 1000);
+
+		const svc = new ContextService(app);
+		const result = await svc.buildContext({
+			seriesKey: SERIES2, notesFolder: FOLDER2,
+			horizonDays: 14, dropExpiredByDate: true,
+			stickyToken: '!sticky', now,
+		});
+		expect(result.content).toContain('Keep API frozen');
+		// sticky token should be stripped from rendered output
+		expect(result.content).not.toContain('!sticky');
+	});
+
+	it('excludes decision with past embedded date', async () => {
+		const app = makeApp();
+		const now = new Date('2026-03-02');
+		addDecisionNote(app, 'dated.md', ['- Ship by 2026-01-15'], '2026-02-25', 1000);
+
+		const svc = new ContextService(app);
+		const result = await svc.buildContext({
+			seriesKey: SERIES2, notesFolder: FOLDER2,
+			horizonDays: 14, dropExpiredByDate: true,
+			stickyToken: '!sticky', now,
+		});
+		expect(result.content).not.toContain('Ship by 2026-01-15');
+	});
+
+	it('integration: 3 notes — correct mixed filtering', async () => {
+		const app = makeApp();
+		const now = new Date('2026-03-02');
+
+		// Note 1: recent (5 days ago) — should be included
+		addDecisionNote(app, 'note1.md', ['- Adopt monorepo structure'], '2026-02-25', 1000);
+
+		// Note 2: old (60 days ago) — should be excluded by TTL
+		addDecisionNote(app, 'note2.md', ['- Use gRPC for internal APIs'], '2026-01-01', 2000);
+
+		// Note 3: old but sticky — should be included, token stripped
+		addDecisionNote(app, 'note3.md', ['- Freeze public API !sticky'], '2026-01-01', 3000);
+
+		const svc = new ContextService(app);
+		const result = await svc.buildContext({
+			seriesKey: SERIES2, notesFolder: FOLDER2, maxLookback: 10,
+			horizonDays: 14, dropExpiredByDate: true,
+			stickyToken: '!sticky', now,
+		});
+
+		expect(result.content).toContain('Adopt monorepo structure');   // included: within horizon
+		expect(result.content).not.toContain('Use gRPC for internal');  // excluded: TTL
+		expect(result.content).toContain('Freeze public API');           // included: sticky
+		expect(result.content).not.toContain('!sticky');                 // token stripped
+	});
+});
