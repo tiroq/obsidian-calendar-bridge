@@ -21,6 +21,7 @@ import {
 	buildAgendaBlock,
 	buildJoinersBlock,
 	buildLinksBlock,
+	extractFrontmatterOverrides,
 } from '../src/note-generator';
 import { CalendarEvent, DEFAULT_SETTINGS, NormalizedEvent, PluginSettings, SeriesProfile } from '../src/types';
 
@@ -418,7 +419,7 @@ describe('buildFrontmatter', () => {
 		expect(fm).toContain('title:');
 		expect(fm).toContain('start:');
 		expect(fm).toContain('status: confirmed');
-		expect(fm).toContain('draft: true');
+		expect(fm).toMatch(/draft: (true|false)/);
 	});
 
 	it('includes series_key and series_name for recurring events', () => {
@@ -812,5 +813,135 @@ User content`;
 			linksBody:    '',
 		});
 		expect(result).toContain('User content');
+	});
+});
+
+// ─── extractFrontmatterOverrides ──────────────────────────────────────────────
+
+describe('extractFrontmatterOverrides', () => {
+	it('returns undefined for content without frontmatter', () => {
+		const content = '# No frontmatter\nJust content.';
+		expect(extractFrontmatterOverrides(content)).toBeUndefined();
+	});
+
+	it('extracts draft: true', () => {
+		const content = `---
+title: Test
+draft: true
+---
+# Content`;
+		const result = extractFrontmatterOverrides(content);
+		expect(result?.draft).toBe(true);
+	});
+
+	it('extracts draft: false', () => {
+		const content = `---
+title: Test
+draft: false
+---
+# Content`;
+		const result = extractFrontmatterOverrides(content);
+		expect(result?.draft).toBe(false);
+	});
+
+	it('extracts attendees in block format', () => {
+		const content = `---
+title: Test
+attendees:
+  - "[[Alice]]"
+  - "Bob <bob@example.com>"
+---
+# Content`;
+		const result = extractFrontmatterOverrides(content);
+		expect(result?.attendees).toEqual(['[[Alice]]', 'Bob <bob@example.com>']);
+	});
+
+	it('extracts attendees in inline format', () => {
+		const content = `---
+title: Test
+attendees: ["[[Alice]]", "Bob"]
+---
+# Content`;
+		const result = extractFrontmatterOverrides(content);
+		expect(result?.attendees).toEqual(['[[Alice]]', 'Bob']);
+	});
+
+	it('returns undefined when no draft or attendees', () => {
+		const content = `---
+title: Test
+status: confirmed
+---
+# Content`;
+		expect(extractFrontmatterOverrides(content)).toBeUndefined();
+	});
+});
+
+// ─── buildFrontmatter with overrides ──────────────────────────────────────────
+
+describe('buildFrontmatter with overrides', () => {
+	const futureEvent: NormalizedEvent = {
+		title: 'Future Meeting',
+		start: '2099-01-15T09:00:00+07:00',
+		end: '2099-01-15T10:00:00+07:00',
+		startDate: new Date('2099-01-15T09:00:00+07:00'),
+		endDate: new Date('2099-01-15T10:00:00+07:00'),
+		source: 'ics_public',
+		calendarId: 'cal1',
+		eventId: 'evt1',
+		uid: 'uid1',
+		status: 'confirmed',
+		isRecurring: false,
+		isAllDay: false,
+		seriesKey: 'test-series',
+		sourceName: 'Test Calendar',
+		attendees: [{ email: 'alice@example.com', name: 'Alice' }],
+	};
+
+	const pastEvent: NormalizedEvent = {
+		...futureEvent,
+		title: 'Past Meeting',
+		start: '2020-01-15T09:00:00+07:00',
+		end: '2020-01-15T10:00:00+07:00',
+		startDate: new Date('2020-01-15T09:00:00+07:00'),
+		endDate: new Date('2020-01-15T10:00:00+07:00'),
+	};
+
+	const settings: PluginSettings = { ...DEFAULT_SETTINGS };
+
+	it('sets draft: true for future meetings by default', () => {
+		const fm = buildFrontmatter(futureEvent, settings);
+		expect(fm).toContain('draft: true');
+	});
+
+	it('sets draft: false for past meetings by default', () => {
+		const fm = buildFrontmatter(pastEvent, settings);
+		expect(fm).toContain('draft: false');
+	});
+
+	it('preserves draft: false from overrides even for future meetings', () => {
+		const fm = buildFrontmatter(futureEvent, settings, undefined, undefined, { draft: false });
+		expect(fm).toContain('draft: false');
+	});
+
+	it('uses event attendees when draft: true (no override)', () => {
+		const fm = buildFrontmatter(futureEvent, settings);
+		expect(fm).toContain('Alice <alice@example.com>');
+	});
+
+	it('preserves existing attendees when draft: false with attendees override', () => {
+		const overrides = {
+			draft: false,
+			attendees: ['[[Bob]]', '[[Charlie]]'],
+		};
+		const fm = buildFrontmatter(futureEvent, settings, undefined, undefined, overrides);
+		expect(fm).toContain('draft: false');
+		expect(fm).toContain('[[Bob]]');
+		expect(fm).toContain('[[Charlie]]');
+		expect(fm).not.toContain('Alice');
+	});
+
+	it('uses event attendees when draft: false but no attendees override', () => {
+		const fm = buildFrontmatter(pastEvent, settings, undefined, undefined, { draft: false });
+		expect(fm).toContain('Alice <alice@example.com>');
 	});
 });
