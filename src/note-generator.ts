@@ -239,17 +239,42 @@ export function getSeriesPagePath(seriesName: string, settings: AnySettings): st
 // ─── Frontmatter builder ──────────────────────────────────────────────────────
 
 /**
+ * Overrides for buildFrontmatter when updating existing notes.
+ * Used to preserve user-set values that should not be overwritten by sync.
+ */
+export interface FrontmatterOverrides {
+	/** If provided, use this draft value instead of defaulting to true. */
+	draft?: boolean;
+	/** If provided, use these attendees instead of syncing from calendar. */
+	attendees?: string[];
+}
+
+/**
  * Build the YAML frontmatter string (without the --- fences) for a meeting note.
+ *
+ * @param overrides - Optional overrides for draft status and attendees.
+ *   When `overrides.draft` is false, the note is considered confirmed and
+ *   `overrides.attendees` (if provided) will be used instead of calendar data.
  */
 export function buildFrontmatter(
 	event: NormalizedEvent,
 	settings: PluginSettings,
 	seriesProfile?: SeriesProfile,
 	contactMap?: ContactMap,
+	overrides?: FrontmatterOverrides,
 ): string {
 	const seriesName = seriesProfile?.seriesName ?? event.title;
 	const tags       = buildTags(event, seriesProfile);
 	const timezone   = event.timezone ?? settings.timezoneDefault ?? '';
+
+	// Determine draft status:
+	// 1. If overrides.draft is explicitly false, preserve it (user confirmed the note)
+	// 2. If meeting is in the past, default to false (can't be a draft after it happened)
+	// 3. Otherwise, true (upcoming meeting, still a draft)
+	const isPast = event.startDate < new Date();
+	const draft = overrides?.draft === false
+		? false
+		: (isPast ? false : true);
 
 	const lines: string[] = [
 		`type: meeting`,
@@ -270,10 +295,20 @@ export function buildFrontmatter(
 	}
 
 	lines.push(`status: ${event.status}`);
-	lines.push(`draft: true`);
+	lines.push(`draft: ${draft}`);
 
 	if (!settings.redactionMode) {
-		if (event.attendees && event.attendees.length > 0) {
+		// Use preserved attendees if note is confirmed (draft: false) and we have them
+		// Otherwise sync from calendar
+		const usePreservedAttendees = overrides?.draft === false && overrides?.attendees;
+
+		if (usePreservedAttendees) {
+			// Preserve existing attendees exactly as they were
+			lines.push(`attendees:`);
+			for (const attendee of overrides.attendees!) {
+				lines.push(`  - ${yamlString(attendee)}`);
+			}
+		} else if (event.attendees && event.attendees.length > 0) {
 			lines.push(`attendees:`);
 			for (const a of event.attendees) {
 				const noteName = contactMap?.get(a.email.toLowerCase());
@@ -311,6 +346,52 @@ function yamlString(val: string): string {
 		return `"${val.replace(/"/g, '\\"')}"`;
 	}
 	return val;
+}
+
+// ─── Frontmatter extraction helpers ──────────────────────────────────────────
+
+/**
+ * Extract draft status and attendees from existing note content.
+ * Used to preserve user-confirmed values during sync.
+ */
+export function extractFrontmatterOverrides(content: string): FrontmatterOverrides | undefined {
+	const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+	if (!fmMatch) return undefined;
+
+	const yaml = fmMatch[1];
+	const overrides: FrontmatterOverrides = {};
+
+	// Extract draft value
+	const draftMatch = yaml.match(/^draft:\s*(true|false)\s*$/m);
+	if (draftMatch) {
+		overrides.draft = draftMatch[1] === 'true';
+	}
+
+	// Extract attendees (both inline and block formats)
+	const attendees: string[] = [];
+	// Inline format: attendees: ["Name 1", "Name 2"] — .* allows ] inside [[WikiLinks]]
+	const inlineMatch = yaml.match(/^attendees:\s*\[(.*)\]\s*$/m);
+	if (inlineMatch) {
+		const items = inlineMatch[1].split(',').map(s => s.trim().replace(/^["']|["']$/g, ''));
+		attendees.push(...items.filter(s => s.length > 0));
+	} else {
+		// Block format: attendees:\n  - "Name 1"\n  - "Name 2"
+		const blockMatch = yaml.match(/^attendees:\s*\n((?:\s+-\s+.+\n?)+)/m);
+		if (blockMatch) {
+			const lines = blockMatch[1].split('\n');
+			for (const line of lines) {
+				const itemMatch = line.match(/^\s+-\s+(.+)$/);
+				if (itemMatch) {
+					attendees.push(itemMatch[1].trim().replace(/^["']|["']$/g, ''));
+				}
+			}
+		}
+	}
+	if (attendees.length > 0) {
+		overrides.attendees = attendees;
+	}
+
+	return (overrides.draft !== undefined || overrides.attendees) ? overrides : undefined;
 }
 
 // ─── AUTOGEN block content builders ──────────────────────────────────────────

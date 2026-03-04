@@ -22,7 +22,7 @@ import { CbSlot } from './TemplateService';
 import { NormalizedEvent, PluginSettings } from '../types';
 import { ContextService } from './ContextService';
 import { ActionAggregationService } from './ActionAggregationService';
-import { buildFrontmatter, buildLinksBlock } from '../note-generator';
+import { buildFrontmatter, buildLinksBlock, FrontmatterOverrides } from '../note-generator';
 import { ContactMap } from '../contacts';
 
 // ─── Params ──────────────────────────────────────────────────────────────────
@@ -39,6 +39,8 @@ export interface BuildCbBlocksParams {
 	actionService: ActionAggregationService;
 	/** When true, CB_DIAGNOSTICS is populated with a trace block. */
 	debugEnabled?: boolean;
+	/** Overrides for frontmatter values (e.g., preserved draft/attendees from existing note). */
+	frontmatterOverrides?: FrontmatterOverrides;
 }
 
 // ─── Builder ─────────────────────────────────────────────────────────────────
@@ -59,6 +61,7 @@ export async function buildCbBlocks(
 		contextService,
 		actionService,
 		debugEnabled = false,
+		frontmatterOverrides,
 	} = params;
 
 	const diagnosticsLines: string[] = [];
@@ -67,7 +70,7 @@ export async function buildCbBlocks(
 	};
 
 	// ── CB_FM: YAML frontmatter lines (without ---) ──────────────────────────
-	const fm = buildFrontmatter(event, settings, undefined, contactMap);
+	const fm = buildFrontmatter(event, settings, undefined, contactMap, frontmatterOverrides);
 	trace(`CB_FM: ${fm.split('\n').length} lines`);
 
 	// ── CB_HEADER: compact structured header ────────────────────────────────

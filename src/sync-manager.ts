@@ -37,6 +37,7 @@ import {
 	buildJoinersBlock,
 	buildLinksBlock,
 	extractExistingAttendees,
+	extractFrontmatterOverrides,
 } from './note-generator';
 import { buildContactMap } from './contacts';
 import {
@@ -440,6 +441,17 @@ export async function runSync(
 			console.log(`[CalendarBridge] TEMPLATE_ROUTE — "${event.title}" path="${routeResult.templatePath || '(built-in)'}" reason=${routeResult.reason}${routeResult.matchedRouteId ? ` matchedRoute=${routeResult.matchedRouteId}` : ''}`);
 			const eventTemplate = await loadTemplate(routeResult.templatePath);
 
+			// Check if note exists to extract preserved values (draft, attendees)
+			const existing = app.vault.getAbstractFileByPath(notePath);
+			const existingContent = existing instanceof TFile
+				? await app.vault.read(existing)
+				: undefined;
+
+			// Extract overrides from existing note to preserve user-confirmed values
+			const frontmatterOverrides = existingContent
+				? extractFrontmatterOverrides(existingContent)
+				: undefined;
+
 			// Build note content using the new normalized renderer
 			const newContent = fillTemplateNormalized(eventTemplate, {
 				event,
@@ -461,12 +473,10 @@ export async function runSync(
 				contextService,
 				actionService,
 				debugEnabled: false,
+				frontmatterOverrides,
 			});
 
-			const existing = app.vault.getAbstractFileByPath(notePath);
-			if (existing instanceof TFile) {
-				const existingContent = await app.vault.read(existing);
-
+			if (existingContent !== undefined) {
 				// Support both old single-block AUTOGEN and new named blocks
 				const hasNamedBlocks = existingContent.includes(AUTOGEN_AGENDA_START);
 				let updated: string;
@@ -505,7 +515,7 @@ export async function runSync(
 				}
 				if (updated !== existingContent) {
 					console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → UPDATE ${notePath} (AUTOGEN changed)`);
-					await app.vault.modify(existing, updated);
+					await app.vault.modify(existing as TFile, updated);
 					result.updated++;
 				} else {
 					console.log(`[CalendarBridge] NOTE_ACTION — "${event.title}" → SKIP ${notePath} (no changes)`);
