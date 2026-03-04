@@ -71,6 +71,10 @@ export class Vault {
 		return new TFolder(path);
 	}
 
+	async trash(file: TFile, _system: boolean): Promise<void> {
+		this.files.delete(file.path);
+	}
+
 	// ── Test helpers ───────────────────────────────────────────────────────────
 
 	/** Read a file by path without needing a TFile handle (test convenience). */

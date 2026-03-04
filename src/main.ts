@@ -31,6 +31,8 @@ import {
 	CalendarBridgePanelPlugin,
 } from './views/panel/CalendarPanelView';
 import { DiagnosticsService } from './services/DiagnosticsService';
+import { CleanupModal } from './modals/cleanup-modal';
+import { findDraftNotesForSeries } from './services/CleanupService';
 // ─── Plugin ────────────────────────────────────────────────────────────────────
 
 export default class CalendarBridgePlugin
@@ -148,6 +150,17 @@ export default class CalendarBridgePlugin
 
 	async disableSeries(key: string): Promise<void> {
 		await this.stateManager.disableSeries(key);
+		const profile = this.stateManager.getProfile(key);
+		const seriesName = profile?.seriesName ?? key;
+		const meetingsRoot = this.settings.meetingsRoot ?? 'Meetings';
+		const draftResult = await findDraftNotesForSeries(this.app, key, meetingsRoot);
+		if (draftResult.deletable.length > 0 || draftResult.skipped.length > 0) {
+			new CleanupModal(this.app, seriesName, draftResult, (deleted) => {
+				if (deleted > 0) {
+					new Notice(`Calendar Bridge: Deleted ${deleted} draft note${deleted !== 1 ? 's' : ''} for "${seriesName}".`);
+				}
+			}).open();
+		}
 	}
 
 	async upsertProfile(profile: import('./types').SeriesProfile): Promise<void> {
